@@ -227,6 +227,7 @@ class AuthMode(Enum):
     apikey = "apikey"
     chatgpt = "chatgpt"
     chatgpt_auth_tokens = "chatgptAuthTokens"
+    agent_identity = "agentIdentity"
 
 
 class AutoReviewDecisionSource(RootModel[Literal["agent"]]):
@@ -274,6 +275,7 @@ class CodexErrorInfoValue(Enum):
     context_window_exceeded = "contextWindowExceeded"
     usage_limit_exceeded = "usageLimitExceeded"
     server_overloaded = "serverOverloaded"
+    cyber_policy = "cyberPolicy"
     internal_server_error = "internalServerError"
     unauthorized = "unauthorized"
     bad_request = "badRequest"
@@ -658,6 +660,56 @@ class ConfigReadParams(BaseModel):
     include_layers: Annotated[bool | None, Field(alias="includeLayers")] = False
 
 
+class CommandConfiguredHookHandler(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    async_: Annotated[bool, Field(alias="async")]
+    command: str
+    status_message: Annotated[str | None, Field(alias="statusMessage")] = None
+    timeout_sec: Annotated[int | None, Field(alias="timeoutSec", ge=0)] = None
+    type: Annotated[Literal["command"], Field(title="CommandConfiguredHookHandlerType")]
+
+
+class PromptConfiguredHookHandler(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    type: Annotated[Literal["prompt"], Field(title="PromptConfiguredHookHandlerType")]
+
+
+class AgentConfiguredHookHandler(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    type: Annotated[Literal["agent"], Field(title="AgentConfiguredHookHandlerType")]
+
+
+class ConfiguredHookHandler(
+    RootModel[
+        CommandConfiguredHookHandler
+        | PromptConfiguredHookHandler
+        | AgentConfiguredHookHandler
+    ]
+):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: (
+        CommandConfiguredHookHandler
+        | PromptConfiguredHookHandler
+        | AgentConfiguredHookHandler
+    )
+
+
+class ConfiguredHookMatcherGroup(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    hooks: list[ConfiguredHookHandler]
+    matcher: str | None = None
+
+
 class InputTextContentItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -702,6 +754,75 @@ class DeprecationNoticeNotification(BaseModel):
         ),
     ] = None
     summary: Annotated[str, Field(description="Concise summary of what is deprecated.")]
+
+
+class DeviceKeyAlgorithm(RootModel[Literal["ecdsa_p256_sha256"]]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        Literal["ecdsa_p256_sha256"],
+        Field(
+            description="Device-key algorithm reported at enrollment and signing boundaries."
+        ),
+    ]
+
+
+class DeviceKeyProtectionClass(Enum):
+    hardware_secure_enclave = "hardware_secure_enclave"
+    hardware_tpm = "hardware_tpm"
+    os_protected_nonextractable = "os_protected_nonextractable"
+
+
+class DeviceKeyProtectionPolicy(Enum):
+    hardware_only = "hardware_only"
+    allow_os_protected_nonextractable = "allow_os_protected_nonextractable"
+
+
+class DeviceKeyPublicParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    key_id: Annotated[str, Field(alias="keyId")]
+
+
+class DeviceKeyPublicResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    algorithm: DeviceKeyAlgorithm
+    key_id: Annotated[str, Field(alias="keyId")]
+    protection_class: Annotated[
+        DeviceKeyProtectionClass, Field(alias="protectionClass")
+    ]
+    public_key_spki_der_base64: Annotated[
+        str,
+        Field(
+            alias="publicKeySpkiDerBase64",
+            description="SubjectPublicKeyInfo DER encoded as base64.",
+        ),
+    ]
+
+
+class DeviceKeySignResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    algorithm: DeviceKeyAlgorithm
+    signature_der_base64: Annotated[
+        str,
+        Field(
+            alias="signatureDerBase64",
+            description="ECDSA signature DER encoded as base64.",
+        ),
+    ]
+    signed_payload_base64: Annotated[
+        str,
+        Field(
+            alias="signedPayloadBase64",
+            description="Exact bytes signed by the device key, encoded as base64. Verifiers must verify this byte string directly and must not reserialize `payload`.",
+        ),
+    ]
 
 
 class InputTextDynamicToolCallOutputContentItem(BaseModel):
@@ -1386,6 +1507,19 @@ class GuardianUserAuthorization(Enum):
     high = "high"
 
 
+class GuardianWarningNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    message: Annotated[
+        str, Field(description="Concise guardian warning message for the user.")
+    ]
+    thread_id: Annotated[
+        str,
+        Field(alias="threadId", description="Thread target for the guardian warning."),
+    ]
+
+
 class HookEventName(Enum):
     pre_tool_use = "preToolUse"
     permission_request = "permissionRequest"
@@ -1677,6 +1811,28 @@ class LogoutAccountResponse(BaseModel):
     )
 
 
+class ManagedHooksRequirements(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    permission_request: Annotated[
+        list[ConfiguredHookMatcherGroup], Field(alias="PermissionRequest")
+    ]
+    post_tool_use: Annotated[
+        list[ConfiguredHookMatcherGroup], Field(alias="PostToolUse")
+    ]
+    pre_tool_use: Annotated[list[ConfiguredHookMatcherGroup], Field(alias="PreToolUse")]
+    session_start: Annotated[
+        list[ConfiguredHookMatcherGroup], Field(alias="SessionStart")
+    ]
+    stop: Annotated[list[ConfiguredHookMatcherGroup], Field(alias="Stop")]
+    user_prompt_submit: Annotated[
+        list[ConfiguredHookMatcherGroup], Field(alias="UserPromptSubmit")
+    ]
+    managed_dir: Annotated[str | None, Field(alias="managedDir")] = None
+    windows_managed_dir: Annotated[str | None, Field(alias="windowsManagedDir")] = None
+
+
 class MarketplaceAddParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -1933,6 +2089,22 @@ class ModelUpgradeInfo(BaseModel):
     upgrade_copy: Annotated[str | None, Field(alias="upgradeCopy")] = None
 
 
+class ModelVerification(RootModel[Literal["trustedAccessForCyber"]]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Literal["trustedAccessForCyber"]
+
+
+class ModelVerificationNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+    verifications: list[ModelVerification]
+
+
 class NetworkAccess(Enum):
     restricted = "restricted"
     enabled = "enabled"
@@ -2056,6 +2228,13 @@ class PatchChangeKind(
         populate_by_name=True,
     )
     root: AddPatchChangeKind | DeletePatchChangeKind | UpdatePatchChangeKind
+
+
+class PermissionProfileNetworkPermissions(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    enabled: bool | None = None
 
 
 class Personality(Enum):
@@ -2475,6 +2654,34 @@ class ReasoningTextDeltaNotification(BaseModel):
     item_id: Annotated[str, Field(alias="itemId")]
     thread_id: Annotated[str, Field(alias="threadId")]
     turn_id: Annotated[str, Field(alias="turnId")]
+
+
+class RemoteControlClientConnectionAudience(
+    RootModel[Literal["remote_control_client_websocket"]]
+):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        Literal["remote_control_client_websocket"],
+        Field(
+            description="Audience for a remote-control client connection device-key proof."
+        ),
+    ]
+
+
+class RemoteControlClientEnrollmentAudience(
+    RootModel[Literal["remote_control_client_enrollment"]]
+):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        Literal["remote_control_client_enrollment"],
+        Field(
+            description="Audience for a remote-control client enrollment device-key proof."
+        ),
+    ]
 
 
 class RequestId(RootModel[str | int]):
@@ -3047,6 +3254,27 @@ class ModelReroutedServerNotification(BaseModel):
     params: ModelReroutedNotification
 
 
+class ModelVerificationServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Annotated[
+        Literal["model/verification"],
+        Field(title="Model/verificationNotificationMethod"),
+    ]
+    params: ModelVerificationNotification
+
+
+class GuardianWarningServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Annotated[
+        Literal["guardianWarning"], Field(title="GuardianWarningNotificationMethod")
+    ]
+    params: GuardianWarningNotification
+
+
 class DeprecationNoticeServerNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -3163,7 +3391,7 @@ class SkillSummary(BaseModel):
     enabled: bool
     interface: SkillInterface | None = None
     name: str
-    path: AbsolutePathBuf
+    path: AbsolutePathBuf | None = None
     short_description: Annotated[str | None, Field(alias="shortDescription")] = None
 
 
@@ -3311,6 +3539,26 @@ class ThreadActiveFlag(Enum):
     waiting_on_user_input = "waitingOnUserInput"
 
 
+class ThreadApproveGuardianDeniedActionParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    event: Annotated[
+        Any,
+        Field(
+            description="Serialized `codex_protocol::protocol::GuardianAssessmentEvent`."
+        ),
+    ]
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadApproveGuardianDeniedActionResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
 class ThreadArchiveParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -3353,35 +3601,38 @@ class ThreadCompactStartResponse(BaseModel):
     )
 
 
-class ThreadForkParams(BaseModel):
+class ThreadContextWindowCategory(Enum):
+    model_scaffold = "model_scaffold"
+    tool_schemas = "tool_schemas"
+    runtime_context = "runtime_context"
+    project_user_context = "project_user_context"
+    conversation = "conversation"
+    tool_io = "tool_io"
+    model_state = "model_state"
+    other = "other"
+
+
+class ThreadContextWindowSegment(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    approval_policy: Annotated[AskForApproval | None, Field(alias="approvalPolicy")] = (
-        None
+    category: ThreadContextWindowCategory
+    estimated_bytes: Annotated[int, Field(alias="estimatedBytes")]
+    estimated_tokens: Annotated[int, Field(alias="estimatedTokens")]
+    label: str
+    percent_of_reported_input: Annotated[
+        float | None, Field(alias="percentOfReportedInput")
+    ] = None
+
+
+class ThreadContextWindowTarget(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
     )
-    approvals_reviewer: Annotated[
-        ApprovalsReviewer | None,
-        Field(
-            alias="approvalsReviewer",
-            description="Override where approval requests are routed for review on this thread and subsequent turns.",
-        ),
-    ] = None
-    base_instructions: Annotated[str | None, Field(alias="baseInstructions")] = None
-    config: dict[str, Any] | None = None
-    cwd: str | None = None
-    developer_instructions: Annotated[
-        str | None, Field(alias="developerInstructions")
-    ] = None
-    ephemeral: bool | None = None
-    model: Annotated[
-        str | None,
-        Field(description="Configuration overrides for the forked thread, if any."),
-    ] = None
-    model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
-    sandbox: SandboxMode | None = None
-    service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
-    thread_id: Annotated[str, Field(alias="threadId")]
+    content_index: Annotated[int | None, Field(alias="contentIndex", ge=0)] = None
+    input_index: Annotated[int | None, Field(alias="inputIndex", ge=0)] = None
+    request_json_pointer: Annotated[str, Field(alias="requestJsonPointer")]
+    tool_name: Annotated[str | None, Field(alias="toolName")] = None
 
 
 class ThreadId(RootModel[str]):
@@ -3586,6 +3837,13 @@ class ContextCompactionThreadItem(BaseModel):
     type: Annotated[
         Literal["contextCompaction"], Field(title="ContextCompactionThreadItemType")
     ]
+
+
+class ThreadListCwdFilter(RootModel[str | list[str]]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: str | list[str]
 
 
 class ThreadLoadedListParams(BaseModel):
@@ -3806,37 +4064,6 @@ class ThreadRealtimeTranscriptDoneNotification(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
-class ThreadResumeParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    approval_policy: Annotated[AskForApproval | None, Field(alias="approvalPolicy")] = (
-        None
-    )
-    approvals_reviewer: Annotated[
-        ApprovalsReviewer | None,
-        Field(
-            alias="approvalsReviewer",
-            description="Override where approval requests are routed for review on this thread and subsequent turns.",
-        ),
-    ] = None
-    base_instructions: Annotated[str | None, Field(alias="baseInstructions")] = None
-    config: dict[str, Any] | None = None
-    cwd: str | None = None
-    developer_instructions: Annotated[
-        str | None, Field(alias="developerInstructions")
-    ] = None
-    model: Annotated[
-        str | None,
-        Field(description="Configuration overrides for the resumed thread, if any."),
-    ] = None
-    model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
-    personality: Personality | None = None
-    sandbox: SandboxMode | None = None
-    service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
-    thread_id: Annotated[str, Field(alias="threadId")]
-
-
 class ThreadRollbackParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4048,6 +4275,14 @@ class TurnDiffUpdatedNotification(BaseModel):
     diff: str
     thread_id: Annotated[str, Field(alias="threadId")]
     turn_id: Annotated[str, Field(alias="turnId")]
+
+
+class TurnEnvironmentParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    cwd: AbsolutePathBuf
+    environment_id: Annotated[str, Field(alias="environmentId")]
 
 
 class TurnInterruptParams(BaseModel):
@@ -4374,26 +4609,6 @@ class InitializeRequest(BaseModel):
     params: InitializeParams
 
 
-class ThreadResumeRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[
-        Literal["thread/resume"], Field(title="Thread/resumeRequestMethod")
-    ]
-    params: ThreadResumeParams
-
-
-class ThreadForkRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[Literal["thread/fork"], Field(title="Thread/forkRequestMethod")]
-    params: ThreadForkParams
-
-
 class ThreadArchiveRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4471,6 +4686,18 @@ class ThreadShellCommandRequest(BaseModel):
         Literal["thread/shellCommand"], Field(title="Thread/shellCommandRequestMethod")
     ]
     params: ThreadShellCommandParams
+
+
+class ThreadApproveGuardianDeniedActionRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/approveGuardianDeniedAction"],
+        Field(title="Thread/approveGuardianDeniedActionRequestMethod"),
+    ]
+    params: ThreadApproveGuardianDeniedActionParams
 
 
 class ThreadRollbackRequest(BaseModel):
@@ -4582,6 +4809,17 @@ class AppListRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["app/list"], Field(title="App/listRequestMethod")]
     params: AppsListParams
+
+
+class DeviceKeyPublicRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["device/key/public"], Field(title="Device/key/publicRequestMethod")
+    ]
+    params: DeviceKeyPublicParams
 
 
 class FsReadFileRequest(BaseModel):
@@ -5047,94 +5285,6 @@ class CommandExecOutputDeltaNotification(BaseModel):
     ]
 
 
-class CommandExecParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    command: Annotated[
-        list[str], Field(description="Command argv vector. Empty arrays are rejected.")
-    ]
-    cwd: Annotated[
-        str | None,
-        Field(description="Optional working directory. Defaults to the server cwd."),
-    ] = None
-    disable_output_cap: Annotated[
-        bool | None,
-        Field(
-            alias="disableOutputCap",
-            description="Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.",
-        ),
-    ] = None
-    disable_timeout: Annotated[
-        bool | None,
-        Field(
-            alias="disableTimeout",
-            description="Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.",
-        ),
-    ] = None
-    env: Annotated[
-        dict[str, Any] | None,
-        Field(
-            description="Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable."
-        ),
-    ] = None
-    output_bytes_cap: Annotated[
-        int | None,
-        Field(
-            alias="outputBytesCap",
-            description="Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
-            ge=0,
-        ),
-    ] = None
-    process_id: Annotated[
-        str | None,
-        Field(
-            alias="processId",
-            description="Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
-        ),
-    ] = None
-    sandbox_policy: Annotated[
-        SandboxPolicy | None,
-        Field(
-            alias="sandboxPolicy",
-            description="Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted.",
-        ),
-    ] = None
-    size: Annotated[
-        CommandExecTerminalSize | None,
-        Field(
-            description="Optional initial PTY size in character cells. Only valid when `tty` is true."
-        ),
-    ] = None
-    stream_stdin: Annotated[
-        bool | None,
-        Field(
-            alias="streamStdin",
-            description="Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
-        ),
-    ] = None
-    stream_stdout_stderr: Annotated[
-        bool | None,
-        Field(
-            alias="streamStdoutStderr",
-            description="Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
-        ),
-    ] = None
-    timeout_ms: Annotated[
-        int | None,
-        Field(
-            alias="timeoutMs",
-            description="Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
-        ),
-    ] = None
-    tty: Annotated[
-        bool | None,
-        Field(
-            description="Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`."
-        ),
-    ] = None
-
-
 class CommandExecResizeParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -5266,6 +5416,159 @@ class ContentItem(
         populate_by_name=True,
     )
     root: InputTextContentItem | InputImageContentItem | OutputTextContentItem
+
+
+class DeviceKeyCreateParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_user_id: Annotated[str, Field(alias="accountUserId")]
+    client_id: Annotated[str, Field(alias="clientId")]
+    protection_policy: Annotated[
+        DeviceKeyProtectionPolicy | None,
+        Field(
+            alias="protectionPolicy",
+            description="Defaults to `hardware_only` when omitted.",
+        ),
+    ] = None
+
+
+class DeviceKeyCreateResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    algorithm: DeviceKeyAlgorithm
+    key_id: Annotated[str, Field(alias="keyId")]
+    protection_class: Annotated[
+        DeviceKeyProtectionClass, Field(alias="protectionClass")
+    ]
+    public_key_spki_der_base64: Annotated[
+        str,
+        Field(
+            alias="publicKeySpkiDerBase64",
+            description="SubjectPublicKeyInfo DER encoded as base64.",
+        ),
+    ]
+
+
+class RemoteControlClientConnectionDeviceKeySignPayload(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_user_id: Annotated[str, Field(alias="accountUserId")]
+    audience: RemoteControlClientConnectionAudience
+    client_id: Annotated[str, Field(alias="clientId")]
+    nonce: str
+    scopes: Annotated[
+        list[str],
+        Field(
+            description="Must contain exactly `remote_control_controller_websocket`."
+        ),
+    ]
+    session_id: Annotated[
+        str,
+        Field(
+            alias="sessionId",
+            description="Backend-issued websocket session id that this proof authorizes.",
+        ),
+    ]
+    target_origin: Annotated[
+        str,
+        Field(
+            alias="targetOrigin",
+            description="Origin of the backend endpoint that issued the challenge and will verify this proof.",
+        ),
+    ]
+    target_path: Annotated[
+        str,
+        Field(
+            alias="targetPath",
+            description="Websocket route path that this proof authorizes.",
+        ),
+    ]
+    token_expires_at: Annotated[
+        int,
+        Field(
+            alias="tokenExpiresAt",
+            description="Remote-control token expiration as Unix seconds.",
+        ),
+    ]
+    token_sha256_base64url: Annotated[
+        str,
+        Field(
+            alias="tokenSha256Base64url",
+            description="SHA-256 of the controller-scoped remote-control token, encoded as unpadded base64url.",
+        ),
+    ]
+    type: Annotated[
+        Literal["remoteControlClientConnection"],
+        Field(title="RemoteControlClientConnectionDeviceKeySignPayloadType"),
+    ]
+
+
+class RemoteControlClientEnrollmentDeviceKeySignPayload(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_user_id: Annotated[str, Field(alias="accountUserId")]
+    audience: RemoteControlClientEnrollmentAudience
+    challenge_expires_at: Annotated[
+        int,
+        Field(
+            alias="challengeExpiresAt",
+            description="Enrollment challenge expiration as Unix seconds.",
+        ),
+    ]
+    challenge_id: Annotated[
+        str,
+        Field(
+            alias="challengeId",
+            description="Backend-issued enrollment challenge id that this proof authorizes.",
+        ),
+    ]
+    client_id: Annotated[str, Field(alias="clientId")]
+    device_identity_sha256_base64url: Annotated[
+        str,
+        Field(
+            alias="deviceIdentitySha256Base64url",
+            description="SHA-256 of the requested device identity operation, encoded as unpadded base64url.",
+        ),
+    ]
+    nonce: str
+    target_origin: Annotated[
+        str,
+        Field(
+            alias="targetOrigin",
+            description="Origin of the backend endpoint that issued the challenge and will verify this proof.",
+        ),
+    ]
+    target_path: Annotated[
+        str,
+        Field(
+            alias="targetPath",
+            description="HTTP route path that this proof authorizes.",
+        ),
+    ]
+    type: Annotated[
+        Literal["remoteControlClientEnrollment"],
+        Field(title="RemoteControlClientEnrollmentDeviceKeySignPayloadType"),
+    ]
+
+
+class DeviceKeySignPayload(
+    RootModel[
+        RemoteControlClientConnectionDeviceKeySignPayload
+        | RemoteControlClientEnrollmentDeviceKeySignPayload
+    ]
+):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        RemoteControlClientConnectionDeviceKeySignPayload
+        | RemoteControlClientEnrollmentDeviceKeySignPayload,
+        Field(description="Structured payloads accepted by `device/key/sign`."),
+    ]
 
 
 class ExperimentalFeature(BaseModel):
@@ -5598,6 +5901,16 @@ class OverriddenMetadata(BaseModel):
     overriding_layer: Annotated[ConfigLayerMetadata, Field(alias="overridingLayer")]
 
 
+class PermissionProfileFileSystemPermissions(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    entries: list[FileSystemSandboxEntry]
+    glob_scan_max_depth: Annotated[
+        int | None, Field(alias="globScanMaxDepth", ge=1)
+    ] = None
+
+
 class PluginDetail(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -5605,7 +5918,9 @@ class PluginDetail(BaseModel):
     apps: list[AppSummary]
     description: str | None = None
     marketplace_name: Annotated[str, Field(alias="marketplaceName")]
-    marketplace_path: Annotated[AbsolutePathBuf, Field(alias="marketplacePath")]
+    marketplace_path: Annotated[
+        AbsolutePathBuf | None, Field(alias="marketplacePath")
+    ] = None
     mcp_servers: Annotated[list[str], Field(alias="mcpServers")]
     skills: list[SkillSummary]
     summary: PluginSummary
@@ -5999,6 +6314,21 @@ class SubAgentSource(
     root: SubAgentSourceValue | ThreadSpawnSubAgentSource | OtherSubAgentSource
 
 
+class ThreadContextWindowComponent(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    category: ThreadContextWindowCategory
+    content_hash: Annotated[str, Field(alias="contentHash")]
+    estimated_bytes: Annotated[int, Field(alias="estimatedBytes")]
+    estimated_tokens: Annotated[int, Field(alias="estimatedTokens")]
+    id: str
+    label: str
+    source: str
+    target: ThreadContextWindowTarget
+    value: Any
+
+
 class UserMessageThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6156,9 +6486,9 @@ class ThreadListParams(BaseModel):
         Field(description="Opaque pagination cursor returned by a previous call."),
     ] = None
     cwd: Annotated[
-        str | None,
+        ThreadListCwdFilter | None,
         Field(
-            description="Optional cwd filter; when set, only threads whose session cwd exactly matches this path are returned."
+            description="Optional cwd filter or filters; when set, only threads whose session cwd exactly matches one of these paths are returned."
         ),
     ] = None
     limit: Annotated[
@@ -6202,58 +6532,13 @@ class ThreadListParams(BaseModel):
             description="Optional source filter; when set, only sessions from these source kinds are returned. When omitted or empty, defaults to interactive sources.",
         ),
     ] = None
-
-
-class ThreadStartParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    approval_policy: Annotated[AskForApproval | None, Field(alias="approvalPolicy")] = (
-        None
-    )
-    approvals_reviewer: Annotated[
-        ApprovalsReviewer | None,
+    use_state_db_only: Annotated[
+        bool | None,
         Field(
-            alias="approvalsReviewer",
-            description="Override where approval requests are routed for review on this thread and subsequent turns.",
+            alias="useStateDbOnly",
+            description="If true, return from the state DB without scanning JSONL rollouts to repair thread metadata. Omitted or false preserves scan-and-repair behavior.",
         ),
     ] = None
-    base_instructions: Annotated[str | None, Field(alias="baseInstructions")] = None
-    config: dict[str, Any] | None = None
-    cwd: str | None = None
-    developer_instructions: Annotated[
-        str | None, Field(alias="developerInstructions")
-    ] = None
-    ephemeral: bool | None = None
-    model: str | None = None
-    model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
-    personality: Personality | None = None
-    sandbox: SandboxMode | None = None
-    service_name: Annotated[str | None, Field(alias="serviceName")] = None
-    service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
-    session_start_source: Annotated[
-        ThreadStartSource | None, Field(alias="sessionStartSource")
-    ] = None
-
-
-class ThreadTokenUsage(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    last: TokenUsageBreakdown
-    model_context_window: Annotated[int | None, Field(alias="modelContextWindow")] = (
-        None
-    )
-    total: TokenUsageBreakdown
-
-
-class ThreadTokenUsageUpdatedNotification(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    thread_id: Annotated[str, Field(alias="threadId")]
-    token_usage: Annotated[ThreadTokenUsage, Field(alias="tokenUsage")]
-    turn_id: Annotated[str, Field(alias="turnId")]
 
 
 class ThreadUnsubscribeResponse(BaseModel):
@@ -6300,77 +6585,6 @@ class TurnPlanUpdatedNotification(BaseModel):
     turn_id: Annotated[str, Field(alias="turnId")]
 
 
-class TurnStartParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    approval_policy: Annotated[
-        AskForApproval | None,
-        Field(
-            alias="approvalPolicy",
-            description="Override the approval policy for this turn and subsequent turns.",
-        ),
-    ] = None
-    approvals_reviewer: Annotated[
-        ApprovalsReviewer | None,
-        Field(
-            alias="approvalsReviewer",
-            description="Override where approval requests are routed for review on this turn and subsequent turns.",
-        ),
-    ] = None
-    cwd: Annotated[
-        str | None,
-        Field(
-            description="Override the working directory for this turn and subsequent turns."
-        ),
-    ] = None
-    effort: Annotated[
-        ReasoningEffort | None,
-        Field(
-            description="Override the reasoning effort for this turn and subsequent turns."
-        ),
-    ] = None
-    input: list[UserInput]
-    model: Annotated[
-        str | None,
-        Field(description="Override the model for this turn and subsequent turns."),
-    ] = None
-    output_schema: Annotated[
-        Any | None,
-        Field(
-            alias="outputSchema",
-            description="Optional JSON Schema used to constrain the final assistant message for this turn.",
-        ),
-    ] = None
-    personality: Annotated[
-        Personality | None,
-        Field(
-            description="Override the personality for this turn and subsequent turns."
-        ),
-    ] = None
-    sandbox_policy: Annotated[
-        SandboxPolicy | None,
-        Field(
-            alias="sandboxPolicy",
-            description="Override the sandbox policy for this turn and subsequent turns.",
-        ),
-    ] = None
-    service_tier: Annotated[
-        ServiceTier | None,
-        Field(
-            alias="serviceTier",
-            description="Override the service tier for this turn and subsequent turns.",
-        ),
-    ] = None
-    summary: Annotated[
-        ReasoningSummary | None,
-        Field(
-            description="Override the reasoning summary for this turn and subsequent turns."
-        ),
-    ] = None
-    thread_id: Annotated[str, Field(alias="threadId")]
-
-
 class TurnSteerParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6410,8 +6624,14 @@ class AdditionalFileSystemPermissions(BaseModel):
     glob_scan_max_depth: Annotated[
         int | None, Field(alias="globScanMaxDepth", ge=1)
     ] = None
-    read: list[AbsolutePathBuf] | None = None
-    write: list[AbsolutePathBuf] | None = None
+    read: Annotated[
+        list[AbsolutePathBuf] | None,
+        Field(description="This will be removed in favor of `entries`."),
+    ] = None
+    write: Annotated[
+        list[AbsolutePathBuf] | None,
+        Field(description="This will be removed in favor of `entries`."),
+    ] = None
 
 
 class AppInfo(BaseModel):
@@ -6464,15 +6684,6 @@ class AppsListResponse(BaseModel):
     ] = None
 
 
-class ThreadStartRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[Literal["thread/start"], Field(title="Thread/startRequestMethod")]
-    params: ThreadStartParams
-
-
 class ThreadListRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6482,13 +6693,15 @@ class ThreadListRequest(BaseModel):
     params: ThreadListParams
 
 
-class TurnStartRequest(BaseModel):
+class DeviceKeyCreateRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Annotated[Literal["turn/start"], Field(title="Turn/startRequestMethod")]
-    params: TurnStartParams
+    method: Annotated[
+        Literal["device/key/create"], Field(title="Device/key/createRequestMethod")
+    ]
+    params: DeviceKeyCreateParams
 
 
 class TurnSteerRequest(BaseModel):
@@ -6519,15 +6732,6 @@ class McpServerStatusListRequest(BaseModel):
         Field(title="McpServerStatus/listRequestMethod"),
     ]
     params: ListMcpServerStatusParams
-
-
-class CommandExecRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[Literal["command/exec"], Field(title="Command/execRequestMethod")]
-    params: CommandExecParams
 
 
 class CommandExecResizeRequest(BaseModel):
@@ -6590,6 +6794,14 @@ class ConfigWriteResponse(BaseModel):
     ] = None
     status: WriteStatus
     version: str
+
+
+class DeviceKeySignParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    key_id: Annotated[str, Field(alias="keyId")]
+    payload: DeviceKeySignPayload
 
 
 class ErrorNotification(BaseModel):
@@ -6693,6 +6905,16 @@ class ListMcpServerStatusResponse(BaseModel):
             description="Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
         ),
     ] = None
+
+
+class PermissionProfile(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    file_system: Annotated[
+        PermissionProfileFileSystemPermissions | None, Field(alias="fileSystem")
+    ] = None
+    network: PermissionProfileNetworkPermissions | None = None
 
 
 class PluginListResponse(BaseModel):
@@ -6814,17 +7036,6 @@ class ErrorServerNotification(BaseModel):
     params: ErrorNotification
 
 
-class ThreadTokenUsageUpdatedServerNotification(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    method: Annotated[
-        Literal["thread/tokenUsage/updated"],
-        Field(title="Thread/tokenUsage/updatedNotificationMethod"),
-    ]
-    params: ThreadTokenUsageUpdatedNotification
-
-
 class HookCompletedServerNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6925,6 +7136,159 @@ class SessionSource(
     root: SessionSourceValue | CustomSessionSource | SubAgentSessionSource
 
 
+class ThreadContextWindowBreakdown(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    components: list[ThreadContextWindowComponent]
+    estimated_total_tokens: Annotated[int, Field(alias="estimatedTotalTokens")]
+    model_context_window: Annotated[int | None, Field(alias="modelContextWindow")] = (
+        None
+    )
+    reported_input_tokens: Annotated[int | None, Field(alias="reportedInputTokens")] = (
+        None
+    )
+    segments: list[ThreadContextWindowSegment]
+
+
+class ThreadForkParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    approval_policy: Annotated[AskForApproval | None, Field(alias="approvalPolicy")] = (
+        None
+    )
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer | None,
+        Field(
+            alias="approvalsReviewer",
+            description="Override where approval requests are routed for review on this thread and subsequent turns.",
+        ),
+    ] = None
+    base_instructions: Annotated[str | None, Field(alias="baseInstructions")] = None
+    config: dict[str, Any] | None = None
+    cwd: str | None = None
+    developer_instructions: Annotated[
+        str | None, Field(alias="developerInstructions")
+    ] = None
+    ephemeral: bool | None = None
+    model: Annotated[
+        str | None,
+        Field(description="Configuration overrides for the forked thread, if any."),
+    ] = None
+    model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
+    permission_profile: Annotated[
+        PermissionProfile | None,
+        Field(
+            alias="permissionProfile",
+            description="Full permissions override for the forked thread. Cannot be combined with `sandbox`.",
+        ),
+    ] = None
+    sandbox: SandboxMode | None = None
+    service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadResumeParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    approval_policy: Annotated[AskForApproval | None, Field(alias="approvalPolicy")] = (
+        None
+    )
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer | None,
+        Field(
+            alias="approvalsReviewer",
+            description="Override where approval requests are routed for review on this thread and subsequent turns.",
+        ),
+    ] = None
+    base_instructions: Annotated[str | None, Field(alias="baseInstructions")] = None
+    config: dict[str, Any] | None = None
+    cwd: str | None = None
+    developer_instructions: Annotated[
+        str | None, Field(alias="developerInstructions")
+    ] = None
+    model: Annotated[
+        str | None,
+        Field(description="Configuration overrides for the resumed thread, if any."),
+    ] = None
+    model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
+    permission_profile: Annotated[
+        PermissionProfile | None,
+        Field(
+            alias="permissionProfile",
+            description="Full permissions override for the resumed thread. Cannot be combined with `sandbox`.",
+        ),
+    ] = None
+    personality: Personality | None = None
+    sandbox: SandboxMode | None = None
+    service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadStartParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    approval_policy: Annotated[AskForApproval | None, Field(alias="approvalPolicy")] = (
+        None
+    )
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer | None,
+        Field(
+            alias="approvalsReviewer",
+            description="Override where approval requests are routed for review on this thread and subsequent turns.",
+        ),
+    ] = None
+    base_instructions: Annotated[str | None, Field(alias="baseInstructions")] = None
+    config: dict[str, Any] | None = None
+    cwd: str | None = None
+    developer_instructions: Annotated[
+        str | None, Field(alias="developerInstructions")
+    ] = None
+    ephemeral: bool | None = None
+    model: str | None = None
+    model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
+    permission_profile: Annotated[
+        PermissionProfile | None,
+        Field(
+            alias="permissionProfile",
+            description="Full permissions override for this thread. Cannot be combined with `sandbox`.",
+        ),
+    ] = None
+    personality: Personality | None = None
+    sandbox: SandboxMode | None = None
+    service_name: Annotated[str | None, Field(alias="serviceName")] = None
+    service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
+    session_start_source: Annotated[
+        ThreadStartSource | None, Field(alias="sessionStartSource")
+    ] = None
+
+
+class ThreadTokenUsage(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    context_window_breakdown: Annotated[
+        ThreadContextWindowBreakdown | None, Field(alias="contextWindowBreakdown")
+    ] = None
+    last: TokenUsageBreakdown
+    model_context_window: Annotated[int | None, Field(alias="modelContextWindow")] = (
+        None
+    )
+    total: TokenUsageBreakdown
+
+
+class ThreadTokenUsageUpdatedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+    token_usage: Annotated[ThreadTokenUsage, Field(alias="tokenUsage")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
 class Turn(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6972,6 +7336,84 @@ class TurnCompletedNotification(BaseModel):
     turn: Turn
 
 
+class TurnStartParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    approval_policy: Annotated[
+        AskForApproval | None,
+        Field(
+            alias="approvalPolicy",
+            description="Override the approval policy for this turn and subsequent turns.",
+        ),
+    ] = None
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer | None,
+        Field(
+            alias="approvalsReviewer",
+            description="Override where approval requests are routed for review on this turn and subsequent turns.",
+        ),
+    ] = None
+    cwd: Annotated[
+        str | None,
+        Field(
+            description="Override the working directory for this turn and subsequent turns."
+        ),
+    ] = None
+    effort: Annotated[
+        ReasoningEffort | None,
+        Field(
+            description="Override the reasoning effort for this turn and subsequent turns."
+        ),
+    ] = None
+    input: list[UserInput]
+    model: Annotated[
+        str | None,
+        Field(description="Override the model for this turn and subsequent turns."),
+    ] = None
+    output_schema: Annotated[
+        Any | None,
+        Field(
+            alias="outputSchema",
+            description="Optional JSON Schema used to constrain the final assistant message for this turn.",
+        ),
+    ] = None
+    permission_profile: Annotated[
+        PermissionProfile | None,
+        Field(
+            alias="permissionProfile",
+            description="Override the full permissions profile for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`.",
+        ),
+    ] = None
+    personality: Annotated[
+        Personality | None,
+        Field(
+            description="Override the personality for this turn and subsequent turns."
+        ),
+    ] = None
+    sandbox_policy: Annotated[
+        SandboxPolicy | None,
+        Field(
+            alias="sandboxPolicy",
+            description="Override the sandbox policy for this turn and subsequent turns.",
+        ),
+    ] = None
+    service_tier: Annotated[
+        ServiceTier | None,
+        Field(
+            alias="serviceTier",
+            description="Override the service tier for this turn and subsequent turns.",
+        ),
+    ] = None
+    summary: Annotated[
+        ReasoningSummary | None,
+        Field(
+            description="Override the reasoning summary for this turn and subsequent turns."
+        ),
+    ] = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
 class TurnStartResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6987,6 +7429,55 @@ class TurnStartedNotification(BaseModel):
     turn: Turn
 
 
+class ThreadStartRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["thread/start"], Field(title="Thread/startRequestMethod")]
+    params: ThreadStartParams
+
+
+class ThreadResumeRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/resume"], Field(title="Thread/resumeRequestMethod")
+    ]
+    params: ThreadResumeParams
+
+
+class ThreadForkRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["thread/fork"], Field(title="Thread/forkRequestMethod")]
+    params: ThreadForkParams
+
+
+class DeviceKeySignRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["device/key/sign"], Field(title="Device/key/signRequestMethod")
+    ]
+    params: DeviceKeySignParams
+
+
+class TurnStartRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["turn/start"], Field(title="Turn/startRequestMethod")]
+    params: TurnStartParams
+
+
 class ConfigBatchWriteRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6996,6 +7487,101 @@ class ConfigBatchWriteRequest(BaseModel):
         Literal["config/batchWrite"], Field(title="Config/batchWriteRequestMethod")
     ]
     params: ConfigBatchWriteParams
+
+
+class CommandExecParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    command: Annotated[
+        list[str], Field(description="Command argv vector. Empty arrays are rejected.")
+    ]
+    cwd: Annotated[
+        str | None,
+        Field(description="Optional working directory. Defaults to the server cwd."),
+    ] = None
+    disable_output_cap: Annotated[
+        bool | None,
+        Field(
+            alias="disableOutputCap",
+            description="Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.",
+        ),
+    ] = None
+    disable_timeout: Annotated[
+        bool | None,
+        Field(
+            alias="disableTimeout",
+            description="Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.",
+        ),
+    ] = None
+    env: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description="Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable."
+        ),
+    ] = None
+    output_bytes_cap: Annotated[
+        int | None,
+        Field(
+            alias="outputBytesCap",
+            description="Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
+            ge=0,
+        ),
+    ] = None
+    permission_profile: Annotated[
+        PermissionProfile | None,
+        Field(
+            alias="permissionProfile",
+            description="Optional full permissions profile for this command.\n\nDefaults to the user's configured permissions when omitted. Cannot be combined with `sandboxPolicy`.",
+        ),
+    ] = None
+    process_id: Annotated[
+        str | None,
+        Field(
+            alias="processId",
+            description="Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
+        ),
+    ] = None
+    sandbox_policy: Annotated[
+        SandboxPolicy | None,
+        Field(
+            alias="sandboxPolicy",
+            description="Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted. Cannot be combined with `permissionProfile`.",
+        ),
+    ] = None
+    size: Annotated[
+        CommandExecTerminalSize | None,
+        Field(
+            description="Optional initial PTY size in character cells. Only valid when `tty` is true."
+        ),
+    ] = None
+    stream_stdin: Annotated[
+        bool | None,
+        Field(
+            alias="streamStdin",
+            description="Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
+        ),
+    ] = None
+    stream_stdout_stderr: Annotated[
+        bool | None,
+        Field(
+            alias="streamStdoutStderr",
+            description="Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
+        ),
+    ] = None
+    timeout_ms: Annotated[
+        int | None,
+        Field(
+            alias="timeoutMs",
+            description="Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
+        ),
+    ] = None
+    tty: Annotated[
+        bool | None,
+        Field(
+            description="Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`."
+        ),
+    ] = None
 
 
 class Config(BaseModel):
@@ -7155,6 +7741,17 @@ class ReviewStartResponse(BaseModel):
         ),
     ]
     turn: Turn
+
+
+class ThreadTokenUsageUpdatedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Annotated[
+        Literal["thread/tokenUsage/updated"],
+        Field(title="Thread/tokenUsage/updatedNotificationMethod"),
+    ]
+    params: ThreadTokenUsageUpdatedNotification
 
 
 class TurnStartedServerNotification(BaseModel):
@@ -7320,10 +7917,22 @@ class ThreadForkResponse(BaseModel):
     ] = []
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
+    permission_profile: Annotated[
+        PermissionProfile | None,
+        Field(
+            alias="permissionProfile",
+            description="Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`.",
+        ),
+    ] = None
     reasoning_effort: Annotated[
         ReasoningEffort | None, Field(alias="reasoningEffort")
     ] = None
-    sandbox: SandboxPolicy
+    sandbox: Annotated[
+        SandboxPolicy,
+        Field(
+            description="Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
+        ),
+    ]
     service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
     thread: Thread
 
@@ -7385,10 +7994,22 @@ class ThreadResumeResponse(BaseModel):
     ] = []
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
+    permission_profile: Annotated[
+        PermissionProfile | None,
+        Field(
+            alias="permissionProfile",
+            description="Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`.",
+        ),
+    ] = None
     reasoning_effort: Annotated[
         ReasoningEffort | None, Field(alias="reasoningEffort")
     ] = None
-    sandbox: SandboxPolicy
+    sandbox: Annotated[
+        SandboxPolicy,
+        Field(
+            description="Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
+        ),
+    ]
     service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
     thread: Thread
 
@@ -7427,10 +8048,22 @@ class ThreadStartResponse(BaseModel):
     ] = []
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
+    permission_profile: Annotated[
+        PermissionProfile | None,
+        Field(
+            alias="permissionProfile",
+            description="Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`.",
+        ),
+    ] = None
     reasoning_effort: Annotated[
         ReasoningEffort | None, Field(alias="reasoningEffort")
     ] = None
-    sandbox: SandboxPolicy
+    sandbox: Annotated[
+        SandboxPolicy,
+        Field(
+            description="Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
+        ),
+    ]
     service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
     thread: Thread
 
@@ -7470,6 +8103,15 @@ class ThreadUnarchiveResponse(BaseModel):
     thread: Thread
 
 
+class CommandExecRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["command/exec"], Field(title="Command/execRequestMethod")]
+    params: CommandExecParams
+
+
 class ExternalAgentConfigImportRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -7495,6 +8137,7 @@ class ClientRequest(
         | ThreadUnarchiveRequest
         | ThreadCompactStartRequest
         | ThreadShellCommandRequest
+        | ThreadApproveGuardianDeniedActionRequest
         | ThreadRollbackRequest
         | ThreadListRequest
         | ThreadLoadedListRequest
@@ -7507,6 +8150,9 @@ class ClientRequest(
         | PluginListRequest
         | PluginReadRequest
         | AppListRequest
+        | DeviceKeyCreateRequest
+        | DeviceKeyPublicRequest
+        | DeviceKeySignRequest
         | FsReadFileRequest
         | FsWriteFileRequest
         | FsCreateDirectoryRequest
@@ -7567,6 +8213,7 @@ class ClientRequest(
         | ThreadUnarchiveRequest
         | ThreadCompactStartRequest
         | ThreadShellCommandRequest
+        | ThreadApproveGuardianDeniedActionRequest
         | ThreadRollbackRequest
         | ThreadListRequest
         | ThreadLoadedListRequest
@@ -7579,6 +8226,9 @@ class ClientRequest(
         | PluginListRequest
         | PluginReadRequest
         | AppListRequest
+        | DeviceKeyCreateRequest
+        | DeviceKeyPublicRequest
+        | DeviceKeySignRequest
         | FsReadFileRequest
         | FsWriteFileRequest
         | FsCreateDirectoryRequest
@@ -7680,7 +8330,9 @@ class ServerNotification(
         | ItemReasoningTextDeltaServerNotification
         | ThreadCompactedServerNotification
         | ModelReroutedServerNotification
+        | ModelVerificationServerNotification
         | WarningServerNotification
+        | GuardianWarningServerNotification
         | DeprecationNoticeServerNotification
         | ConfigWarningServerNotification
         | FuzzyFileSearchSessionUpdatedServerNotification
@@ -7742,7 +8394,9 @@ class ServerNotification(
         | ItemReasoningTextDeltaServerNotification
         | ThreadCompactedServerNotification
         | ModelReroutedServerNotification
+        | ModelVerificationServerNotification
         | WarningServerNotification
+        | GuardianWarningServerNotification
         | DeprecationNoticeServerNotification
         | ConfigWarningServerNotification
         | FuzzyFileSearchSessionUpdatedServerNotification

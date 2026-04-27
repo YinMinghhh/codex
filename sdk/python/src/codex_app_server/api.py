@@ -146,6 +146,7 @@ class Codex:
         ephemeral: bool | None = None,
         model: str | None = None,
         model_provider: str | None = None,
+        permission_profile: PermissionProfile | None = None,
         personality: Personality | None = None,
         sandbox: SandboxMode | None = None,
         service_name: str | None = None,
@@ -162,6 +163,7 @@ class Codex:
             ephemeral=ephemeral,
             model=model,
             model_provider=model_provider,
+            permission_profile=permission_profile,
             personality=personality,
             sandbox=sandbox,
             service_name=service_name,
@@ -176,13 +178,14 @@ class Codex:
         *,
         archived: bool | None = None,
         cursor: str | None = None,
-        cwd: str | None = None,
+        cwd: ThreadListCwdFilter | None = None,
         limit: int | None = None,
         model_providers: list[str] | None = None,
         search_term: str | None = None,
         sort_direction: SortDirection | None = None,
         sort_key: ThreadSortKey | None = None,
         source_kinds: list[ThreadSourceKind] | None = None,
+        use_state_db_only: bool | None = None,
     ) -> ThreadListResponse:
         params = ThreadListParams(
             archived=archived,
@@ -194,6 +197,7 @@ class Codex:
             sort_direction=sort_direction,
             sort_key=sort_key,
             source_kinds=source_kinds,
+            use_state_db_only=use_state_db_only,
         )
         return self._client.thread_list(params)
 
@@ -209,6 +213,7 @@ class Codex:
         developer_instructions: str | None = None,
         model: str | None = None,
         model_provider: str | None = None,
+        permission_profile: PermissionProfile | None = None,
         personality: Personality | None = None,
         sandbox: SandboxMode | None = None,
         service_tier: ServiceTier | None = None,
@@ -223,6 +228,7 @@ class Codex:
             developer_instructions=developer_instructions,
             model=model,
             model_provider=model_provider,
+            permission_profile=permission_profile,
             personality=personality,
             sandbox=sandbox,
             service_tier=service_tier,
@@ -243,6 +249,7 @@ class Codex:
         ephemeral: bool | None = None,
         model: str | None = None,
         model_provider: str | None = None,
+        permission_profile: PermissionProfile | None = None,
         sandbox: SandboxMode | None = None,
         service_tier: ServiceTier | None = None,
     ) -> Thread:
@@ -257,6 +264,7 @@ class Codex:
             ephemeral=ephemeral,
             model=model,
             model_provider=model_provider,
+            permission_profile=permission_profile,
             sandbox=sandbox,
             service_tier=service_tier,
         )
@@ -340,6 +348,7 @@ class AsyncCodex:
         ephemeral: bool | None = None,
         model: str | None = None,
         model_provider: str | None = None,
+        permission_profile: PermissionProfile | None = None,
         personality: Personality | None = None,
         sandbox: SandboxMode | None = None,
         service_name: str | None = None,
@@ -357,6 +366,7 @@ class AsyncCodex:
             ephemeral=ephemeral,
             model=model,
             model_provider=model_provider,
+            permission_profile=permission_profile,
             personality=personality,
             sandbox=sandbox,
             service_name=service_name,
@@ -371,13 +381,14 @@ class AsyncCodex:
         *,
         archived: bool | None = None,
         cursor: str | None = None,
-        cwd: str | None = None,
+        cwd: ThreadListCwdFilter | None = None,
         limit: int | None = None,
         model_providers: list[str] | None = None,
         search_term: str | None = None,
         sort_direction: SortDirection | None = None,
         sort_key: ThreadSortKey | None = None,
         source_kinds: list[ThreadSourceKind] | None = None,
+        use_state_db_only: bool | None = None,
     ) -> ThreadListResponse:
         await self._ensure_initialized()
         params = ThreadListParams(
@@ -390,6 +401,7 @@ class AsyncCodex:
             sort_direction=sort_direction,
             sort_key=sort_key,
             source_kinds=source_kinds,
+            use_state_db_only=use_state_db_only,
         )
         return await self._client.thread_list(params)
 
@@ -405,6 +417,7 @@ class AsyncCodex:
         developer_instructions: str | None = None,
         model: str | None = None,
         model_provider: str | None = None,
+        permission_profile: PermissionProfile | None = None,
         personality: Personality | None = None,
         sandbox: SandboxMode | None = None,
         service_tier: ServiceTier | None = None,
@@ -420,6 +433,7 @@ class AsyncCodex:
             developer_instructions=developer_instructions,
             model=model,
             model_provider=model_provider,
+            permission_profile=permission_profile,
             personality=personality,
             sandbox=sandbox,
             service_tier=service_tier,
@@ -440,6 +454,7 @@ class AsyncCodex:
         ephemeral: bool | None = None,
         model: str | None = None,
         model_provider: str | None = None,
+        permission_profile: PermissionProfile | None = None,
         sandbox: SandboxMode | None = None,
         service_tier: ServiceTier | None = None,
     ) -> AsyncThread:
@@ -455,6 +470,7 @@ class AsyncCodex:
             ephemeral=ephemeral,
             model=model,
             model_provider=model_provider,
+            permission_profile=permission_profile,
             sandbox=sandbox,
             service_tier=service_tier,
         )
@@ -526,6 +542,7 @@ class Thread:
         effort: ReasoningEffort | None = None,
         model: str | None = None,
         output_schema: JsonObject | None = None,
+        permission_profile: PermissionProfile | None = None,
         personality: Personality | None = None,
         sandbox_policy: SandboxPolicy | None = None,
         service_tier: ServiceTier | None = None,
@@ -541,6 +558,7 @@ class Thread:
             effort=effort,
             model=model,
             output_schema=output_schema,
+            permission_profile=permission_profile,
             personality=personality,
             sandbox_policy=sandbox_policy,
             service_tier=service_tier,
@@ -610,6 +628,7 @@ class AsyncThread:
         effort: ReasoningEffort | None = None,
         model: str | None = None,
         output_schema: JsonObject | None = None,
+        permission_profile: PermissionProfile | None = None,
         personality: Personality | None = None,
         sandbox_policy: SandboxPolicy | None = None,
         service_tier: ServiceTier | None = None,
@@ -626,6 +645,7 @@ class AsyncThread:
             effort=effort,
             model=model,
             output_schema=output_schema,
+            permission_profile=permission_profile,
             personality=personality,
             sandbox_policy=sandbox_policy,
             service_tier=service_tier,

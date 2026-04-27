@@ -1740,6 +1740,7 @@ fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsage
             reasoning_output_tokens: token_usage.last.reasoning_output_tokens,
         },
         model_context_window: token_usage.model_context_window,
+        context_window_breakdown: token_usage.context_window_breakdown.map(Into::into),
     }
 }
 
@@ -2864,6 +2865,7 @@ impl ChatWidget {
                     total_token_usage: TokenUsage::default(),
                     last_token_usage: TokenUsage::default(),
                     model_context_window: Some(model_context_window),
+                    context_window_breakdown: None,
                 }
             }
         };

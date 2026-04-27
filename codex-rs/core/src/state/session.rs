@@ -11,6 +11,7 @@ use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
+use codex_protocol::protocol::ContextWindowBreakdown;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -36,6 +37,9 @@ pub(crate) struct SessionState {
     /// Trace-only prompt provenance fragments observed while constructing context.
     /// These are matched back to final request input when rollout tracing is enabled.
     prompt_trace_components: Vec<PromptComponent>,
+    /// Breakdown of the latest final model request. This is diagnostic-only and may contain
+    /// full prompt fragments, tool output, and local paths.
+    latest_context_window_breakdown: Option<ContextWindowBreakdown>,
     granted_permissions: Option<PermissionProfile>,
     next_turn_is_first: bool,
 }
@@ -56,6 +60,7 @@ impl SessionState {
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
             prompt_trace_components: Vec::new(),
+            latest_context_window_breakdown: None,
             granted_permissions: None,
             next_turn_is_first: true,
         }
@@ -123,6 +128,7 @@ impl SessionState {
         model_context_window: Option<i64>,
     ) {
         self.history.update_token_info(usage, model_context_window);
+        self.apply_latest_context_window_breakdown(Some(usage.input_tokens));
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {
@@ -144,6 +150,7 @@ impl SessionState {
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
         self.history.set_token_usage_full(context_window);
+        self.latest_context_window_breakdown = None;
     }
 
     pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
@@ -229,6 +236,27 @@ impl SessionState {
 
     pub(crate) fn prompt_trace_components(&self) -> Vec<PromptComponent> {
         self.prompt_trace_components.clone()
+    }
+
+    pub(crate) fn record_context_window_breakdown(&mut self, breakdown: ContextWindowBreakdown) {
+        self.latest_context_window_breakdown = Some(breakdown);
+        let reported_input_tokens = self
+            .history
+            .token_info()
+            .map(|info| info.last_token_usage.input_tokens);
+        self.apply_latest_context_window_breakdown(reported_input_tokens);
+    }
+
+    fn apply_latest_context_window_breakdown(&mut self, reported_input_tokens: Option<i64>) {
+        let Some(breakdown) = self.latest_context_window_breakdown.clone() else {
+            return;
+        };
+        let Some(mut info) = self.history.token_info() else {
+            return;
+        };
+        info.context_window_breakdown =
+            Some(breakdown.with_reported_input_tokens(reported_input_tokens));
+        self.history.set_token_info(Some(info));
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {

@@ -3092,6 +3092,7 @@ mod tests {
     use codex_app_server_protocol::AutoReviewDecisionSource;
     use codex_app_server_protocol::GuardianApprovalReviewStatus;
     use codex_app_server_protocol::JSONRPCErrorError;
+    use codex_app_server_protocol::ThreadContextWindowCategory;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_login::AuthManager;
     use codex_login::CodexAuth;
@@ -3108,6 +3109,11 @@ mod tests {
     use codex_protocol::plan_tool::StepStatus;
     use codex_protocol::protocol::CollabResumeBeginEvent;
     use codex_protocol::protocol::CollabResumeEndEvent;
+    use codex_protocol::protocol::ContextWindowBreakdown;
+    use codex_protocol::protocol::ContextWindowCategory;
+    use codex_protocol::protocol::ContextWindowComponent;
+    use codex_protocol::protocol::ContextWindowSegment;
+    use codex_protocol::protocol::ContextWindowTarget;
     use codex_protocol::protocol::CreditsSnapshot;
     use codex_protocol::protocol::GuardianAssessmentEvent;
     use codex_protocol::protocol::GuardianAssessmentStatus;
@@ -4414,6 +4420,34 @@ mod tests {
                 total_tokens: 23,
             },
             model_context_window: Some(4096),
+            context_window_breakdown: Some(ContextWindowBreakdown {
+                model_context_window: Some(4096),
+                reported_input_tokens: Some(10),
+                estimated_total_tokens: 3,
+                segments: vec![ContextWindowSegment {
+                    category: ContextWindowCategory::ToolSchemas,
+                    label: "Tool schemas".to_string(),
+                    estimated_tokens: 3,
+                    estimated_bytes: 12,
+                    percent_of_reported_input: Some(30.0),
+                }],
+                components: vec![ContextWindowComponent {
+                    id: "tool:1".to_string(),
+                    category: ContextWindowCategory::ToolSchemas,
+                    source: "built_tools".to_string(),
+                    label: "shell".to_string(),
+                    target: ContextWindowTarget {
+                        request_json_pointer: "/tools/0".to_string(),
+                        input_index: None,
+                        content_index: None,
+                        tool_name: Some("shell".to_string()),
+                    },
+                    estimated_tokens: 3,
+                    estimated_bytes: 12,
+                    content_hash: "fnv1a64:0000000000000000".to_string(),
+                    value: serde_json::json!({ "name": "shell" }),
+                }],
+            }),
         };
         let rate_limits = RateLimitSnapshot {
             limit_id: Some("codex".to_string()),
@@ -4456,6 +4490,22 @@ mod tests {
                 assert_eq!(usage.total.cached_input_tokens, 25);
                 assert_eq!(usage.last.output_tokens, 7);
                 assert_eq!(usage.model_context_window, Some(4096));
+                let breakdown = usage
+                    .context_window_breakdown
+                    .expect("context window breakdown");
+                assert_eq!(breakdown.reported_input_tokens, Some(10));
+                assert_eq!(
+                    breakdown.segments[0].category,
+                    ThreadContextWindowCategory::ToolSchemas
+                );
+                assert_eq!(
+                    breakdown.components[0].target.request_json_pointer,
+                    "/tools/0"
+                );
+                assert_eq!(
+                    breakdown.components[0].value,
+                    serde_json::json!({ "name": "shell" })
+                );
             }
             other => bail!("unexpected notification: {other:?}"),
         }

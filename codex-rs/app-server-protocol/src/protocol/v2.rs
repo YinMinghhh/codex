@@ -56,6 +56,11 @@ use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+use codex_protocol::protocol::ContextWindowBreakdown as CoreContextWindowBreakdown;
+use codex_protocol::protocol::ContextWindowCategory as CoreContextWindowCategory;
+use codex_protocol::protocol::ContextWindowComponent as CoreContextWindowComponent;
+use codex_protocol::protocol::ContextWindowSegment as CoreContextWindowSegment;
+use codex_protocol::protocol::ContextWindowTarget as CoreContextWindowTarget;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandSource as CoreExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
@@ -4557,6 +4562,7 @@ pub struct ThreadTokenUsage {
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
+    pub context_window_breakdown: Option<ThreadContextWindowBreakdown>,
 }
 
 impl From<CoreTokenUsageInfo> for ThreadTokenUsage {
@@ -4565,6 +4571,213 @@ impl From<CoreTokenUsageInfo> for ThreadTokenUsage {
             total: value.total_token_usage.into(),
             last: value.last_token_usage.into(),
             model_context_window: value.model_context_window,
+            context_window_breakdown: value.context_window_breakdown.map(Into::into),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadContextWindowBreakdown {
+    #[ts(type = "number | null")]
+    pub model_context_window: Option<i64>,
+    #[ts(type = "number | null")]
+    pub reported_input_tokens: Option<i64>,
+    #[ts(type = "number")]
+    pub estimated_total_tokens: i64,
+    pub segments: Vec<ThreadContextWindowSegment>,
+    pub components: Vec<ThreadContextWindowComponent>,
+}
+
+impl From<CoreContextWindowBreakdown> for ThreadContextWindowBreakdown {
+    fn from(value: CoreContextWindowBreakdown) -> Self {
+        Self {
+            model_context_window: value.model_context_window,
+            reported_input_tokens: value.reported_input_tokens,
+            estimated_total_tokens: value.estimated_total_tokens,
+            segments: value.segments.into_iter().map(Into::into).collect(),
+            components: value.components.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<ThreadContextWindowBreakdown> for CoreContextWindowBreakdown {
+    fn from(value: ThreadContextWindowBreakdown) -> Self {
+        Self {
+            model_context_window: value.model_context_window,
+            reported_input_tokens: value.reported_input_tokens,
+            estimated_total_tokens: value.estimated_total_tokens,
+            segments: value.segments.into_iter().map(Into::into).collect(),
+            components: value.components.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum ThreadContextWindowCategory {
+    ModelScaffold,
+    ToolSchemas,
+    RuntimeContext,
+    ProjectUserContext,
+    Conversation,
+    ToolIo,
+    ModelState,
+    Other,
+}
+
+impl From<CoreContextWindowCategory> for ThreadContextWindowCategory {
+    fn from(value: CoreContextWindowCategory) -> Self {
+        match value {
+            CoreContextWindowCategory::ModelScaffold => Self::ModelScaffold,
+            CoreContextWindowCategory::ToolSchemas => Self::ToolSchemas,
+            CoreContextWindowCategory::RuntimeContext => Self::RuntimeContext,
+            CoreContextWindowCategory::ProjectUserContext => Self::ProjectUserContext,
+            CoreContextWindowCategory::Conversation => Self::Conversation,
+            CoreContextWindowCategory::ToolIo => Self::ToolIo,
+            CoreContextWindowCategory::ModelState => Self::ModelState,
+            CoreContextWindowCategory::Other => Self::Other,
+        }
+    }
+}
+
+impl From<ThreadContextWindowCategory> for CoreContextWindowCategory {
+    fn from(value: ThreadContextWindowCategory) -> Self {
+        match value {
+            ThreadContextWindowCategory::ModelScaffold => Self::ModelScaffold,
+            ThreadContextWindowCategory::ToolSchemas => Self::ToolSchemas,
+            ThreadContextWindowCategory::RuntimeContext => Self::RuntimeContext,
+            ThreadContextWindowCategory::ProjectUserContext => Self::ProjectUserContext,
+            ThreadContextWindowCategory::Conversation => Self::Conversation,
+            ThreadContextWindowCategory::ToolIo => Self::ToolIo,
+            ThreadContextWindowCategory::ModelState => Self::ModelState,
+            ThreadContextWindowCategory::Other => Self::Other,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadContextWindowSegment {
+    pub category: ThreadContextWindowCategory,
+    pub label: String,
+    #[ts(type = "number")]
+    pub estimated_tokens: i64,
+    #[ts(type = "number")]
+    pub estimated_bytes: i64,
+    #[ts(type = "number | null")]
+    pub percent_of_reported_input: Option<f64>,
+}
+
+impl From<CoreContextWindowSegment> for ThreadContextWindowSegment {
+    fn from(value: CoreContextWindowSegment) -> Self {
+        Self {
+            category: value.category.into(),
+            label: value.label,
+            estimated_tokens: value.estimated_tokens,
+            estimated_bytes: value.estimated_bytes,
+            percent_of_reported_input: value.percent_of_reported_input,
+        }
+    }
+}
+
+impl From<ThreadContextWindowSegment> for CoreContextWindowSegment {
+    fn from(value: ThreadContextWindowSegment) -> Self {
+        Self {
+            category: value.category.into(),
+            label: value.label,
+            estimated_tokens: value.estimated_tokens,
+            estimated_bytes: value.estimated_bytes,
+            percent_of_reported_input: value.percent_of_reported_input,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadContextWindowComponent {
+    pub id: String,
+    pub category: ThreadContextWindowCategory,
+    pub source: String,
+    pub label: String,
+    pub target: ThreadContextWindowTarget,
+    #[ts(type = "number")]
+    pub estimated_tokens: i64,
+    #[ts(type = "number")]
+    pub estimated_bytes: i64,
+    pub content_hash: String,
+    #[ts(type = "unknown")]
+    pub value: JsonValue,
+}
+
+impl From<CoreContextWindowComponent> for ThreadContextWindowComponent {
+    fn from(value: CoreContextWindowComponent) -> Self {
+        Self {
+            id: value.id,
+            category: value.category.into(),
+            source: value.source,
+            label: value.label,
+            target: value.target.into(),
+            estimated_tokens: value.estimated_tokens,
+            estimated_bytes: value.estimated_bytes,
+            content_hash: value.content_hash,
+            value: value.value,
+        }
+    }
+}
+
+impl From<ThreadContextWindowComponent> for CoreContextWindowComponent {
+    fn from(value: ThreadContextWindowComponent) -> Self {
+        Self {
+            id: value.id,
+            category: value.category.into(),
+            source: value.source,
+            label: value.label,
+            target: value.target.into(),
+            estimated_tokens: value.estimated_tokens,
+            estimated_bytes: value.estimated_bytes,
+            content_hash: value.content_hash,
+            value: value.value,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadContextWindowTarget {
+    pub request_json_pointer: String,
+    #[ts(type = "number | null")]
+    pub input_index: Option<usize>,
+    #[ts(type = "number | null")]
+    pub content_index: Option<usize>,
+    #[ts(type = "string | null")]
+    pub tool_name: Option<String>,
+}
+
+impl From<CoreContextWindowTarget> for ThreadContextWindowTarget {
+    fn from(value: CoreContextWindowTarget) -> Self {
+        Self {
+            request_json_pointer: value.request_json_pointer,
+            input_index: value.input_index,
+            content_index: value.content_index,
+            tool_name: value.tool_name,
+        }
+    }
+}
+
+impl From<ThreadContextWindowTarget> for CoreContextWindowTarget {
+    fn from(value: ThreadContextWindowTarget) -> Self {
+        Self {
+            request_json_pointer: value.request_json_pointer,
+            input_index: value.input_index,
+            content_index: value.content_index,
+            tool_name: value.tool_name,
         }
     }
 }

@@ -106,6 +106,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
+use crate::prompt_trace::build_context_window_breakdown;
 use crate::prompt_trace::build_prompt_assembly_trace;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::map_api_error;
@@ -1212,16 +1213,16 @@ impl ModelClientSession {
                 service_tier,
             )?;
             let inference_trace_attempt = inference_trace.start_attempt();
-            inference_trace_attempt.record_started_with_prompt_assembly(
+            let prompt_assembly =
+                build_prompt_assembly_trace(&request, prompt, model_info, "", "responses_http");
+            let context_window_breakdown = build_context_window_breakdown(
                 &request,
-                Some(build_prompt_assembly_trace(
-                    &request,
-                    prompt,
-                    model_info,
-                    "",
-                    "responses_http",
-                )),
+                &prompt_assembly,
+                model_info.resolved_context_window(),
+                None,
             );
+            inference_trace_attempt
+                .record_started_with_prompt_assembly(&request, Some(prompt_assembly));
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1232,11 +1233,12 @@ impl ModelClientSession {
 
             match stream_result {
                 Ok(stream) => {
-                    let (stream, _) = map_response_stream(
+                    let (mut stream, _) = map_response_stream(
                         stream,
                         session_telemetry.clone(),
                         inference_trace_attempt,
                     );
+                    stream.context_window_breakdown = Some(context_window_breakdown);
                     return Ok(stream);
                 }
                 Err(ApiError::Transport(
@@ -1370,16 +1372,21 @@ impl ModelClientSession {
             } else {
                 inference_trace.start_attempt()
             };
-            inference_trace_attempt.record_started_with_prompt_assembly(
+            let prompt_assembly = build_prompt_assembly_trace(
                 &ws_request,
-                Some(build_prompt_assembly_trace(
-                    &ws_request,
-                    prompt,
-                    model_info,
-                    "",
-                    "responses_websocket",
-                )),
+                prompt,
+                model_info,
+                "",
+                "responses_websocket",
             );
+            let context_window_breakdown = build_context_window_breakdown(
+                &ws_request,
+                &prompt_assembly,
+                model_info.resolved_context_window(),
+                None,
+            );
+            inference_trace_attempt
+                .record_started_with_prompt_assembly(&ws_request, Some(prompt_assembly));
             let websocket_connection =
                 self.websocket_session.connection.as_ref().ok_or_else(|| {
                     map_api_error(ApiError::Stream(
@@ -1394,11 +1401,12 @@ impl ModelClientSession {
                     inference_trace_attempt.record_failed(&err);
                     err
                 })?;
-            let (stream, last_request_rx) = map_response_stream(
+            let (mut stream, last_request_rx) = map_response_stream(
                 stream_result,
                 session_telemetry.clone(),
                 inference_trace_attempt,
             );
+            stream.context_window_breakdown = Some(context_window_breakdown);
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
         }
@@ -1726,7 +1734,13 @@ where
         }
     });
 
-    (ResponseStream { rx_event }, rx_last_response)
+    (
+        ResponseStream {
+            rx_event,
+            context_window_breakdown: None,
+        },
+        rx_last_response,
+    )
 }
 
 /// Handles a 401 response by optionally refreshing ChatGPT tokens once.

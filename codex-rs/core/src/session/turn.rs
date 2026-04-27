@@ -1917,6 +1917,10 @@ async fn try_run_sampling_request(
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
+    if let Some(mut breakdown) = stream.context_window_breakdown.take() {
+        breakdown.model_context_window = turn_context.model_context_window();
+        sess.record_context_window_breakdown(breakdown).await;
+    }
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;

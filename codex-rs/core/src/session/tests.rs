@@ -1341,6 +1341,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             total_tokens: 7,
         },
         model_context_window: Some(1_000),
+        context_window_breakdown: None,
     };
     let info2 = TokenUsageInfo {
         total_token_usage: TokenUsage {
@@ -1358,6 +1359,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             total_tokens: 35,
         },
         model_context_window: Some(2_000),
+        context_window_breakdown: None,
     };
 
     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
@@ -1447,6 +1449,7 @@ async fn recompute_token_usage_updates_model_context_window() {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
+            context_window_breakdown: None,
         }));
     }
 

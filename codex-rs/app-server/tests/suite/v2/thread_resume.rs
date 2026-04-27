@@ -485,6 +485,7 @@ async fn thread_resume_token_usage_replay_can_belong_to_interrupted_turn() -> Re
                         total_tokens: 130,
                     },
                     model_context_window: Some(200_000),
+                    context_window_breakdown: None,
                 }),
                 rate_limits: None,
             }))?,

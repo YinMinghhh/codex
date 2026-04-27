@@ -14303,6 +14303,167 @@
         "title": "ThreadCompactStartResponse",
         "type": "object"
       },
+      "ThreadContextWindowBreakdown": {
+        "properties": {
+          "components": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadContextWindowComponent"
+            },
+            "type": "array"
+          },
+          "estimatedTotalTokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "modelContextWindow": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reportedInputTokens": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadContextWindowSegment"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "components",
+          "estimatedTotalTokens",
+          "segments"
+        ],
+        "type": "object"
+      },
+      "ThreadContextWindowCategory": {
+        "enum": [
+          "model_scaffold",
+          "tool_schemas",
+          "runtime_context",
+          "project_user_context",
+          "conversation",
+          "tool_io",
+          "model_state",
+          "other"
+        ],
+        "type": "string"
+      },
+      "ThreadContextWindowComponent": {
+        "properties": {
+          "category": {
+            "$ref": "#/definitions/v2/ThreadContextWindowCategory"
+          },
+          "contentHash": {
+            "type": "string"
+          },
+          "estimatedBytes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "estimatedTokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/definitions/v2/ThreadContextWindowTarget"
+          },
+          "value": true
+        },
+        "required": [
+          "category",
+          "contentHash",
+          "estimatedBytes",
+          "estimatedTokens",
+          "id",
+          "label",
+          "source",
+          "target",
+          "value"
+        ],
+        "type": "object"
+      },
+      "ThreadContextWindowSegment": {
+        "properties": {
+          "category": {
+            "$ref": "#/definitions/v2/ThreadContextWindowCategory"
+          },
+          "estimatedBytes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "estimatedTokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "label": {
+            "type": "string"
+          },
+          "percentOfReportedInput": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "category",
+          "estimatedBytes",
+          "estimatedTokens",
+          "label"
+        ],
+        "type": "object"
+      },
+      "ThreadContextWindowTarget": {
+        "properties": {
+          "contentIndex": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "inputIndex": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "requestJsonPointer": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "requestJsonPointer"
+        ],
+        "type": "object"
+      },
       "ThreadForkParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
@@ -16384,6 +16545,16 @@
       },
       "ThreadTokenUsage": {
         "properties": {
+          "contextWindowBreakdown": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadContextWindowBreakdown"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "last": {
             "$ref": "#/definitions/v2/TokenUsageBreakdown"
           },

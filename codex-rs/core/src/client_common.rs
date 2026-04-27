@@ -4,6 +4,7 @@ use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ContextWindowBreakdown;
 use codex_rollout_trace::PromptComponent;
 use codex_tools::ToolSpec;
 use futures::Stream;
@@ -181,6 +182,7 @@ fn strip_total_output_header(output: &str) -> Option<(&str, u32)> {
 
 pub struct ResponseStream {
     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
+    pub(crate) context_window_breakdown: Option<ContextWindowBreakdown>,
 }
 
 impl Stream for ResponseStream {

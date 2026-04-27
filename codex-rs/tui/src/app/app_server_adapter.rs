@@ -500,6 +500,10 @@ fn server_notification_thread_events(
                             notification.token_usage.last,
                         ),
                         model_context_window: notification.token_usage.model_context_window,
+                        context_window_breakdown: notification
+                            .token_usage
+                            .context_window_breakdown
+                            .map(Into::into),
                     }),
                     rate_limits: None,
                 }),

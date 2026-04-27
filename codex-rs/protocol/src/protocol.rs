@@ -2248,13 +2248,16 @@ pub struct TokenUsage {
     pub total_tokens: i64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
+    #[serde(default)]
+    #[ts(type = "ContextWindowBreakdown | null")]
+    pub context_window_breakdown: Option<ContextWindowBreakdown>,
 }
 
 impl TokenUsageInfo {
@@ -2273,6 +2276,7 @@ impl TokenUsageInfo {
                 total_token_usage: TokenUsage::default(),
                 last_token_usage: TokenUsage::default(),
                 model_context_window,
+                context_window_breakdown: None,
             },
         };
         if let Some(last) = last {
@@ -2294,6 +2298,7 @@ impl TokenUsageInfo {
         let delta = (context_window - previous_total).max(0);
 
         self.model_context_window = Some(context_window);
+        self.context_window_breakdown = None;
         self.total_token_usage = TokenUsage {
             total_tokens: context_window,
             ..TokenUsage::default()
@@ -2309,10 +2314,114 @@ impl TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(context_window),
+            context_window_breakdown: None,
         };
         info.fill_to_context_window(context_window);
         info
     }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ContextWindowCategory {
+    ModelScaffold,
+    ToolSchemas,
+    RuntimeContext,
+    ProjectUserContext,
+    Conversation,
+    ToolIo,
+    ModelState,
+    Other,
+}
+
+impl ContextWindowCategory {
+    pub const ORDERED: [Self; 8] = [
+        Self::ModelScaffold,
+        Self::ToolSchemas,
+        Self::RuntimeContext,
+        Self::ProjectUserContext,
+        Self::Conversation,
+        Self::ToolIo,
+        Self::ModelState,
+        Self::Other,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ModelScaffold => "Model scaffold",
+            Self::ToolSchemas => "Tool schemas",
+            Self::RuntimeContext => "Runtime context",
+            Self::ProjectUserContext => "Project/user context",
+            Self::Conversation => "Conversation",
+            Self::ToolIo => "Tool I/O",
+            Self::ModelState => "Model state",
+            Self::Other => "Other",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ContextWindowBreakdown {
+    #[ts(type = "number | null")]
+    pub model_context_window: Option<i64>,
+    #[ts(type = "number | null")]
+    pub reported_input_tokens: Option<i64>,
+    #[ts(type = "number")]
+    pub estimated_total_tokens: i64,
+    pub segments: Vec<ContextWindowSegment>,
+    pub components: Vec<ContextWindowComponent>,
+}
+
+impl ContextWindowBreakdown {
+    pub fn with_reported_input_tokens(mut self, reported_input_tokens: Option<i64>) -> Self {
+        self.reported_input_tokens = reported_input_tokens;
+        for segment in &mut self.segments {
+            segment.percent_of_reported_input = reported_input_tokens
+                .filter(|tokens| *tokens > 0)
+                .map(|tokens| (segment.estimated_tokens as f64 / tokens as f64) * 100.0);
+        }
+        self
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ContextWindowSegment {
+    pub category: ContextWindowCategory,
+    pub label: String,
+    #[ts(type = "number")]
+    pub estimated_tokens: i64,
+    #[ts(type = "number")]
+    pub estimated_bytes: i64,
+    #[ts(type = "number | null")]
+    pub percent_of_reported_input: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ContextWindowComponent {
+    pub id: String,
+    pub category: ContextWindowCategory,
+    pub source: String,
+    pub label: String,
+    pub target: ContextWindowTarget,
+    #[ts(type = "number")]
+    pub estimated_tokens: i64,
+    #[ts(type = "number")]
+    pub estimated_bytes: i64,
+    pub content_hash: String,
+    #[ts(type = "unknown")]
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ContextWindowTarget {
+    pub request_json_pointer: String,
+    #[ts(type = "number | null")]
+    pub input_index: Option<usize>,
+    #[ts(type = "number | null")]
+    pub content_index: Option<usize>,
+    #[ts(type = "string | null")]
+    pub tool_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -5375,6 +5484,7 @@ mod tests {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
+            context_window_breakdown: None,
         });
         let last = Some(TokenUsage {
             input_tokens: 10,
@@ -5396,6 +5506,7 @@ mod tests {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
+            context_window_breakdown: None,
         });
         let last = Some(TokenUsage {
             input_tokens: 10,
@@ -5410,5 +5521,65 @@ mod tests {
                 .expect("new_or_append should return info");
 
         assert_eq!(info.model_context_window, Some(258_400));
+    }
+
+    #[test]
+    fn token_usage_info_deserializes_without_context_window_breakdown() {
+        let info: TokenUsageInfo = serde_json::from_value(serde_json::json!({
+            "total_token_usage": {
+                "input_tokens": 1,
+                "cached_input_tokens": 0,
+                "output_tokens": 2,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 3
+            },
+            "last_token_usage": {
+                "input_tokens": 1,
+                "cached_input_tokens": 0,
+                "output_tokens": 2,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 3
+            },
+            "model_context_window": 128000
+        }))
+        .expect("old token usage payload should remain compatible");
+
+        assert_eq!(info.context_window_breakdown, None);
+    }
+
+    #[test]
+    fn context_window_breakdown_updates_reported_percentages() {
+        let breakdown = ContextWindowBreakdown {
+            model_context_window: Some(128_000),
+            reported_input_tokens: None,
+            estimated_total_tokens: 30,
+            segments: vec![ContextWindowSegment {
+                category: ContextWindowCategory::ToolSchemas,
+                label: "Tool schemas".to_string(),
+                estimated_tokens: 25,
+                estimated_bytes: 100,
+                percent_of_reported_input: None,
+            }],
+            components: vec![ContextWindowComponent {
+                id: "tool:1".to_string(),
+                category: ContextWindowCategory::ToolSchemas,
+                source: "built_tools".to_string(),
+                label: "shell".to_string(),
+                target: ContextWindowTarget {
+                    request_json_pointer: "/tools/0".to_string(),
+                    input_index: None,
+                    content_index: None,
+                    tool_name: Some("shell".to_string()),
+                },
+                estimated_tokens: 25,
+                estimated_bytes: 100,
+                content_hash: "fnv1a64:0000000000000000".to_string(),
+                value: serde_json::json!({ "name": "shell" }),
+            }],
+        }
+        .with_reported_input_tokens(Some(100));
+
+        assert_eq!(breakdown.reported_input_tokens, Some(100));
+        assert_eq!(breakdown.segments[0].percent_of_reported_input, Some(25.0));
     }
 }

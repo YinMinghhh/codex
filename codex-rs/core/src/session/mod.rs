@@ -324,6 +324,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
+use codex_protocol::protocol::ContextWindowBreakdown;
 use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
@@ -1138,6 +1139,11 @@ impl Session {
             state.prompt_trace_components()
         };
         crate::prompt_trace::retarget_components_for_prompt_input(input, &registered_components)
+    }
+
+    pub(crate) async fn record_context_window_breakdown(&self, breakdown: ContextWindowBreakdown) {
+        let mut state = self.state.lock().await;
+        state.record_context_window_breakdown(breakdown);
     }
 
     // Merges connector IDs into the session-level explicit connector selection.
@@ -2918,6 +2924,7 @@ impl Session {
                 total_token_usage: TokenUsage::default(),
                 last_token_usage: TokenUsage::default(),
                 model_context_window: None,
+                context_window_breakdown: None,
             });
 
             info.last_token_usage = TokenUsage {
