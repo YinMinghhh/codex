@@ -16,6 +16,10 @@ mod recorder;
 mod reducer;
 mod writer;
 
+/// Conventional manifest file name stored in each trace bundle.
+pub use bundle::MANIFEST_FILE_NAME;
+/// Conventional raw event log file name stored in each trace bundle.
+pub use bundle::RAW_EVENT_LOG_FILE_NAME;
 /// Conventional reduced-state cache name written next to a raw trace bundle.
 pub use bundle::REDUCED_STATE_FILE_NAME;
 /// Raw checkpoint payload for a remote compaction install event.

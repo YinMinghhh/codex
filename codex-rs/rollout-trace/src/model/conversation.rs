@@ -162,8 +162,75 @@ pub struct InferenceCall {
     pub tool_call_ids_started_by_response: Vec<ToolCallId>,
     pub usage: Option<TokenUsage>,
     pub raw_request_payload_id: RawPayloadId,
+    /// Trace-only prompt/request provenance captured for this call.
+    pub prompt_assembly_payload_id: Option<RawPayloadId>,
     /// Full upstream response payload. `None` while running or after pre-stream failures.
     pub raw_response_payload_id: Option<RawPayloadId>,
+}
+
+/// Trace-only explanation for one component that influenced a final model request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptComponent {
+    pub id: String,
+    pub source: String,
+    pub label: String,
+    pub target: PromptTarget,
+    pub content_hash: String,
+    pub preview: String,
+    pub metadata: serde_json::Value,
+}
+
+/// Location in the final request affected by a [`PromptComponent`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptTarget {
+    pub request_json_pointer: String,
+    pub input_index: Option<usize>,
+    pub content_index: Option<usize>,
+    pub tool_name: Option<String>,
+}
+
+impl PromptTarget {
+    pub fn request_pointer(request_json_pointer: impl Into<String>) -> Self {
+        Self {
+            request_json_pointer: request_json_pointer.into(),
+            input_index: None,
+            content_index: None,
+            tool_name: None,
+        }
+    }
+
+    pub fn input_text(
+        request_json_pointer: impl Into<String>,
+        input_index: usize,
+        content_index: usize,
+    ) -> Self {
+        Self {
+            request_json_pointer: request_json_pointer.into(),
+            input_index: Some(input_index),
+            content_index: Some(content_index),
+            tool_name: None,
+        }
+    }
+
+    pub fn tool(request_json_pointer: impl Into<String>, tool_name: Option<String>) -> Self {
+        Self {
+            request_json_pointer: request_json_pointer.into(),
+            input_index: None,
+            content_index: None,
+            tool_name,
+        }
+    }
+}
+
+/// Trace-only prompt/request provenance for one inference call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptAssemblyTrace {
+    pub inference_call_id: InferenceCallId,
+    pub codex_turn_id: CodexTurnId,
+    pub model_info: serde_json::Value,
+    pub base_instructions: String,
+    pub components: Vec<PromptComponent>,
+    pub final_request_payload_id: RawPayloadId,
 }
 
 /// Token usage summary for one inference call.

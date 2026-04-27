@@ -5,8 +5,8 @@ use serde::Serialize;
 
 use crate::model::AgentThreadId;
 
-pub(crate) const MANIFEST_FILE_NAME: &str = "manifest.json";
-pub(crate) const RAW_EVENT_LOG_FILE_NAME: &str = "trace.jsonl";
+pub const MANIFEST_FILE_NAME: &str = "manifest.json";
+pub const RAW_EVENT_LOG_FILE_NAME: &str = "trace.jsonl";
 pub(crate) const PAYLOADS_DIR_NAME: &str = "payloads";
 /// Conventional file name for a reducer-written `RolloutTrace` cache.
 pub const REDUCED_STATE_FILE_NAME: &str = "state.json";

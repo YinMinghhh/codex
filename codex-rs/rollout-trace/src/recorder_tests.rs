@@ -10,6 +10,7 @@ use codex_protocol::protocol::SubAgentSource;
 use tempfile::TempDir;
 
 use super::*;
+use crate::CodexTurn;
 use crate::CompactionCheckpointTracePayload;
 use crate::RolloutStatus;
 use crate::replay_bundle;
@@ -42,6 +43,37 @@ fn create_in_root_writes_replayable_lifecycle_events() -> anyhow::Result<()> {
     assert_eq!(replayed.root_thread_id, thread_id.to_string());
     assert_eq!(replayed.threads[&thread_id.to_string()].agent_path, "/root");
     assert_eq!(replayed.raw_payloads.len(), 1);
+
+    Ok(())
+}
+
+#[test]
+fn records_codex_turn_lifecycle() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let thread_id = ThreadId::new();
+    let recorder =
+        RolloutTraceRecorder::create_in_root(temp.path(), thread_id).expect("trace recorder");
+    recorder.record_thread_started(minimal_metadata(thread_id));
+
+    recorder.record_codex_turn_started(thread_id.to_string(), "turn-1");
+    recorder.record_codex_turn_ended("turn-1", crate::ExecutionStatus::Completed);
+
+    let bundle_dir = single_bundle_dir(temp.path())?;
+    let replayed = replay_bundle(&bundle_dir)?;
+    let expected_turn = CodexTurn {
+        codex_turn_id: "turn-1".to_string(),
+        thread_id: thread_id.to_string(),
+        execution: crate::ExecutionWindow {
+            started_at_unix_ms: replayed.codex_turns["turn-1"].execution.started_at_unix_ms,
+            started_seq: 3,
+            ended_at_unix_ms: replayed.codex_turns["turn-1"].execution.ended_at_unix_ms,
+            ended_seq: Some(4),
+            status: crate::ExecutionStatus::Completed,
+        },
+        input_item_ids: Vec::new(),
+    };
+
+    assert_eq!(replayed.codex_turns["turn-1"], expected_turn);
 
     Ok(())
 }

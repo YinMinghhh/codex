@@ -15,6 +15,7 @@ use crate::AgentThreadId;
 use crate::CodexTurnId;
 use crate::CompactionId;
 use crate::CompactionTraceContext;
+use crate::ExecutionStatus;
 use crate::InferenceTraceContext;
 use crate::RawPayloadKind;
 use crate::RawPayloadRef;
@@ -144,6 +145,38 @@ impl RolloutTraceRecorder {
             thread_id: metadata.thread_id,
             agent_path: metadata.agent_path,
             metadata_payload,
+        });
+    }
+
+    /// Emits a lifecycle start event for one Codex turn.
+    pub fn record_codex_turn_started(
+        &self,
+        thread_id: impl Into<AgentThreadId>,
+        codex_turn_id: impl Into<CodexTurnId>,
+    ) {
+        let RolloutTraceRecorderState::Enabled(recorder) = &self.state else {
+            return;
+        };
+
+        recorder.append_best_effort(RawTraceEventPayload::CodexTurnStarted {
+            codex_turn_id: codex_turn_id.into(),
+            thread_id: thread_id.into(),
+        });
+    }
+
+    /// Emits a lifecycle end event for one Codex turn.
+    pub fn record_codex_turn_ended(
+        &self,
+        codex_turn_id: impl Into<CodexTurnId>,
+        status: ExecutionStatus,
+    ) {
+        let RolloutTraceRecorderState::Enabled(recorder) = &self.state else {
+            return;
+        };
+
+        recorder.append_best_effort(RawTraceEventPayload::CodexTurnEnded {
+            codex_turn_id: codex_turn_id.into(),
+            status,
         });
     }
 

@@ -31,6 +31,8 @@ pub enum RawPayloadKind {
     InferenceRequest,
     /// Full upstream inference response or non-delta response stream summary.
     InferenceResponse,
+    /// Trace-only explanation of how one inference request was assembled.
+    PromptAssembly,
     CompactionRequest,
     /// Trace-only checkpoint captured when processed replacement history is installed.
     CompactionCheckpoint,

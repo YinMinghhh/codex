@@ -574,7 +574,7 @@ fn missing_request_input_is_reducer_error() -> anyhow::Result<()> {
 }
 
 #[test]
-fn unknown_previous_response_id_is_reducer_error() -> anyhow::Result<()> {
+fn external_previous_response_id_starts_local_boundary_snapshot() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;
     start_turn(&writer, "turn-1")?;
@@ -588,7 +588,18 @@ fn unknown_previous_response_id_is_reducer_error() -> anyhow::Result<()> {
     )?;
     append_inference_start(&writer, "inference-1", "turn-1", request)?;
 
-    expect_replay_error(&temp, "unknown previous_response_id resp-missing")
+    let replayed = replay_bundle(temp.path())?;
+
+    assert_eq!(
+        replayed.inference_calls["inference-1"].request_item_ids,
+        vec!["conversation_item:1"]
+    );
+    assert_eq!(
+        replayed.threads["thread-root"].conversation_item_ids,
+        vec!["conversation_item:1"]
+    );
+
+    Ok(())
 }
 
 #[test]

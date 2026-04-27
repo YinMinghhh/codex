@@ -99,6 +99,10 @@ pub enum RawTraceEventPayload {
         provider_name: String,
         request_payload: RawPayloadRef,
     },
+    PromptAssemblyCaptured {
+        inference_call_id: InferenceCallId,
+        assembly_payload: RawPayloadRef,
+    },
     InferenceCompleted {
         inference_call_id: InferenceCallId,
         response_id: Option<String>,
@@ -229,6 +233,10 @@ impl RawTraceEventPayload {
             } => metadata_payload.iter().collect(),
             RawTraceEventPayload::InferenceStarted {
                 request_payload, ..
+            }
+            | RawTraceEventPayload::PromptAssemblyCaptured {
+                assembly_payload: request_payload,
+                ..
             }
             | RawTraceEventPayload::InferenceCompleted {
                 response_payload: request_payload,

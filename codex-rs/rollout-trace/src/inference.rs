@@ -17,6 +17,7 @@ use serde_json::Value as JsonValue;
 use crate::model::AgentThreadId;
 use crate::model::CodexTurnId;
 use crate::model::InferenceCallId;
+use crate::model::PromptAssemblyTrace;
 use crate::payload::RawPayloadKind;
 use crate::raw_event::RawTraceEventContext;
 use crate::raw_event::RawTraceEventPayload;
@@ -138,6 +139,15 @@ impl InferenceTraceAttempt {
 
     /// Records the exact request object about to be sent to the model provider.
     pub fn record_started(&self, request: &impl Serialize) {
+        self.record_started_with_prompt_assembly(request, None);
+    }
+
+    /// Records the exact request plus optional trace-only prompt/request provenance.
+    pub fn record_started_with_prompt_assembly(
+        &self,
+        request: &impl Serialize,
+        prompt_assembly: Option<PromptAssemblyTrace>,
+    ) {
         let InferenceTraceAttemptState::Enabled(attempt) = &self.state else {
             return;
         };
@@ -149,6 +159,7 @@ impl InferenceTraceAttempt {
             return;
         };
 
+        let final_request_payload_id = request_payload.raw_payload_id.clone();
         append_with_context_best_effort(
             &attempt.context,
             RawTraceEventPayload::InferenceStarted {
@@ -158,6 +169,28 @@ impl InferenceTraceAttempt {
                 model: attempt.context.model.clone(),
                 provider_name: attempt.context.provider_name.clone(),
                 request_payload,
+            },
+        );
+
+        let Some(mut prompt_assembly) = prompt_assembly else {
+            return;
+        };
+        prompt_assembly.inference_call_id = attempt.inference_call_id.clone();
+        prompt_assembly.codex_turn_id = attempt.context.codex_turn_id.clone();
+        prompt_assembly.final_request_payload_id = final_request_payload_id;
+        let Some(assembly_payload) = write_json_payload_best_effort(
+            &attempt.context.writer,
+            RawPayloadKind::PromptAssembly,
+            &prompt_assembly,
+        ) else {
+            return;
+        };
+
+        append_with_context_best_effort(
+            &attempt.context,
+            RawTraceEventPayload::PromptAssemblyCaptured {
+                inference_call_id: attempt.inference_call_id.clone(),
+                assembly_payload,
             },
         );
     }
@@ -334,6 +367,66 @@ mod tests {
         assert_eq!(inference.codex_turn_id, "turn-1");
         assert_eq!(inference.execution.status, ExecutionStatus::Completed);
         assert_eq!(inference.upstream_request_id, Some("resp-1".to_string()));
+        assert_eq!(rollout.raw_payloads.len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn enabled_context_links_prompt_assembly_to_inference_attempt() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+        let writer = Arc::new(TraceWriter::create(
+            temp.path(),
+            "trace-1".to_string(),
+            "rollout-1".to_string(),
+            "thread-root".to_string(),
+        )?);
+        writer.append(RawTraceEventPayload::ThreadStarted {
+            thread_id: "thread-root".to_string(),
+            agent_path: "/root".to_string(),
+            metadata_payload: None,
+        })?;
+        writer.append(RawTraceEventPayload::CodexTurnStarted {
+            codex_turn_id: "turn-1".to_string(),
+            thread_id: "thread-root".to_string(),
+        })?;
+        let context = InferenceTraceContext::enabled(
+            writer,
+            "thread-root".to_string(),
+            "turn-1".to_string(),
+            "gpt-test".to_string(),
+            "test-provider".to_string(),
+        );
+
+        let attempt = context.start_attempt();
+        attempt.record_started_with_prompt_assembly(
+            &json!({
+                "model": "gpt-test",
+                "input": [],
+            }),
+            Some(PromptAssemblyTrace {
+                inference_call_id: String::new(),
+                codex_turn_id: String::new(),
+                model_info: json!({ "slug": "gpt-test" }),
+                base_instructions: "base".to_string(),
+                components: Vec::new(),
+                final_request_payload_id: String::new(),
+            }),
+        );
+
+        let rollout = replay_bundle(temp.path())?;
+        let inference = rollout
+            .inference_calls
+            .values()
+            .next()
+            .expect("recorded inference call");
+        let assembly_payload_id = inference
+            .prompt_assembly_payload_id
+            .as_ref()
+            .expect("prompt assembly payload id");
+
+        assert_eq!(rollout.inference_calls.len(), 1);
+        assert!(rollout.raw_payloads.contains_key(assembly_payload_id));
         assert_eq!(rollout.raw_payloads.len(), 2);
 
         Ok(())

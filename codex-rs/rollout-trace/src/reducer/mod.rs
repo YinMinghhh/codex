@@ -226,6 +226,12 @@ impl TraceReducer {
                     },
                 )?;
             }
+            RawTraceEventPayload::PromptAssemblyCaptured {
+                inference_call_id,
+                assembly_payload,
+            } => {
+                self.capture_prompt_assembly(inference_call_id, assembly_payload)?;
+            }
             RawTraceEventPayload::InferenceCompleted {
                 inference_call_id,
                 response_id,

@@ -33,7 +33,7 @@ impl TraceReducer {
     pub(super) fn reduce_inference_request(
         &mut self,
         wall_time_unix_ms: i64,
-        inference_call_id: &InferenceCallId,
+        _inference_call_id: &InferenceCallId,
         thread_id: &str,
         codex_turn_id: &str,
         request_payload: &RawPayloadRef,
@@ -69,7 +69,10 @@ impl TraceReducer {
             // Streaming follow-up requests can send only the new input plus a
             // `previous_response_id`. The trace model still exposes the full
             // model-visible input, so rebuild the omitted prefix from the
-            // previous request and response before reducing this delta.
+            // previous request and response before reducing this delta. If the
+            // reference points outside this bundle, reduce the visible input as
+            // this trace's local boundary snapshot instead of making live
+            // replay unusable.
             let previous_items = self
                 .rollout
                 .inference_calls
@@ -83,25 +86,36 @@ impl TraceReducer {
                     ids.extend(inference.response_item_ids.clone());
                     ids
                 });
-            let Some(mut item_ids) = previous_items else {
-                bail!(
-                    "incremental inference request {inference_call_id} referenced unknown previous_response_id {previous_response_id}"
-                );
-            };
-            let delta_item_ids = self.reconcile_conversation_items(
-                items,
-                ReconcileItems {
-                    thread_id,
-                    codex_turn_id,
-                    wall_time_unix_ms,
-                    produced_by: Vec::new(),
-                    start_index: item_ids.len(),
-                    mode: ReconcileMode::AppendOnly,
-                    snapshot_override: None,
-                },
-            )?;
-            item_ids.extend(delta_item_ids);
-            item_ids
+            match previous_items {
+                Some(mut item_ids) => {
+                    let delta_item_ids = self.reconcile_conversation_items(
+                        items,
+                        ReconcileItems {
+                            thread_id,
+                            codex_turn_id,
+                            wall_time_unix_ms,
+                            produced_by: Vec::new(),
+                            start_index: item_ids.len(),
+                            mode: ReconcileMode::AppendOnly,
+                            snapshot_override: None,
+                        },
+                    )?;
+                    item_ids.extend(delta_item_ids);
+                    item_ids
+                }
+                None => self.reconcile_conversation_items(
+                    items,
+                    ReconcileItems {
+                        thread_id,
+                        codex_turn_id,
+                        wall_time_unix_ms,
+                        produced_by: Vec::new(),
+                        start_index: 0,
+                        mode: ReconcileMode::FullSnapshot,
+                        snapshot_override: None,
+                    },
+                )?,
+            }
         } else {
             self.reconcile_conversation_items(
                 items,

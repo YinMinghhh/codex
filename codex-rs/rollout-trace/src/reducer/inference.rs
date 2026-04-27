@@ -97,9 +97,23 @@ impl TraceReducer {
                 tool_call_ids_started_by_response: Vec::new(),
                 usage: None,
                 raw_request_payload_id: started.request_payload.raw_payload_id,
+                prompt_assembly_payload_id: None,
                 raw_response_payload_id: None,
             },
         );
+        Ok(())
+    }
+
+    /// Links prompt/request provenance to an already-started inference call.
+    pub(super) fn capture_prompt_assembly(
+        &mut self,
+        inference_call_id: InferenceCallId,
+        assembly_payload: RawPayloadRef,
+    ) -> Result<()> {
+        let Some(inference) = self.rollout.inference_calls.get_mut(&inference_call_id) else {
+            bail!("prompt assembly referenced unknown inference call {inference_call_id}");
+        };
+        inference.prompt_assembly_payload_id = Some(assembly_payload.raw_payload_id);
         Ok(())
     }
 
