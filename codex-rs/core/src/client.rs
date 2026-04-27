@@ -106,6 +106,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
+use crate::prompt_trace::build_prompt_assembly_trace;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::map_api_error;
 use codex_feedback::FeedbackRequestTags;
@@ -1211,7 +1212,16 @@ impl ModelClientSession {
                 service_tier,
             )?;
             let inference_trace_attempt = inference_trace.start_attempt();
-            inference_trace_attempt.record_started(&request);
+            inference_trace_attempt.record_started_with_prompt_assembly(
+                &request,
+                Some(build_prompt_assembly_trace(
+                    &request,
+                    prompt,
+                    model_info,
+                    "",
+                    "responses_http",
+                )),
+            );
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1360,7 +1370,16 @@ impl ModelClientSession {
             } else {
                 inference_trace.start_attempt()
             };
-            inference_trace_attempt.record_started(&ws_request);
+            inference_trace_attempt.record_started_with_prompt_assembly(
+                &ws_request,
+                Some(build_prompt_assembly_trace(
+                    &ws_request,
+                    prompt,
+                    model_info,
+                    "",
+                    "responses_websocket",
+                )),
+            );
             let websocket_connection =
                 self.websocket_session.connection.as_ref().ok_or_else(|| {
                     map_api_error(ApiError::Stream(

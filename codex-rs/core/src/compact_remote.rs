@@ -164,7 +164,7 @@ async fn run_remote_compact_task_inner_impl(
         &CancellationToken::new(),
     )
     .await?;
-    let prompt = Prompt {
+    let mut prompt = Prompt {
         input: prompt_input,
         tools: tool_router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
@@ -172,7 +172,9 @@ async fn run_remote_compact_task_inner_impl(
         personality: turn_context.personality,
         output_schema: None,
         output_schema_strict: true,
+        trace_components: Vec::new(),
     };
+    prompt.trace_components = sess.prompt_trace_components_for_input(&prompt.input).await;
     let mut new_history = sess
         .services
         .model_client

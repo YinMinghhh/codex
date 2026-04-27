@@ -4,6 +4,7 @@ use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
+use codex_rollout_trace::PromptComponent;
 use codex_tools::ToolSpec;
 use futures::Stream;
 use serde::Deserialize;
@@ -45,6 +46,10 @@ pub struct Prompt {
 
     /// Whether the Responses API should strictly validate `output_schema`.
     pub output_schema_strict: bool,
+
+    /// Trace-only prompt/request provenance components. These never affect the
+    /// request payload sent to the model.
+    pub trace_components: Vec<PromptComponent>,
 }
 
 impl Default for Prompt {
@@ -57,6 +62,7 @@ impl Default for Prompt {
             personality: None,
             output_schema: None,
             output_schema_strict: true,
+            trace_components: Vec::new(),
         }
     }
 }

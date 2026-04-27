@@ -2,6 +2,7 @@
 
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_rollout_trace::PromptComponent;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -32,6 +33,9 @@ pub(crate) struct SessionState {
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
+    /// Trace-only prompt provenance fragments observed while constructing context.
+    /// These are matched back to final request input when rollout tracing is enabled.
+    prompt_trace_components: Vec<PromptComponent>,
     granted_permissions: Option<PermissionProfile>,
     next_turn_is_first: bool,
 }
@@ -51,6 +55,7 @@ impl SessionState {
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
+            prompt_trace_components: Vec::new(),
             granted_permissions: None,
             next_turn_is_first: true,
         }
@@ -216,6 +221,14 @@ impl SessionState {
         &mut self,
     ) -> Option<codex_hooks::SessionStartSource> {
         self.pending_session_start_source.take()
+    }
+
+    pub(crate) fn record_prompt_trace_components(&mut self, components: Vec<PromptComponent>) {
+        self.prompt_trace_components.extend(components);
+    }
+
+    pub(crate) fn prompt_trace_components(&self) -> Vec<PromptComponent> {
+        self.prompt_trace_components.clone()
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {

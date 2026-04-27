@@ -107,6 +107,7 @@ use codex_utils_stream_parser::strip_citations;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::error;
@@ -272,6 +273,25 @@ pub(crate) async fn run_turn(
 
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+    sess.record_prompt_trace_components(crate::prompt_trace::components_for_items(
+        "skills",
+        "explicit skill instructions",
+        &skill_items,
+        json!({
+            "mentioned_skill_count": mentioned_skills.len(),
+        }),
+    ))
+    .await;
+    sess.record_prompt_trace_components(crate::prompt_trace::components_for_items(
+        "plugins",
+        "explicit plugin/app instructions",
+        &plugin_items,
+        json!({
+            "mentioned_plugin_count": mentioned_plugins.len(),
+            "available_connector_count": available_connectors.len(),
+        }),
+    ))
+    .await;
     let mentioned_plugin_metadata = mentioned_plugins
         .iter()
         .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
@@ -971,6 +991,7 @@ pub(crate) fn build_prompt(
         output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
             &turn_context.session_source,
         ),
+        trace_components: Vec::new(),
     }
 }
 
@@ -1061,12 +1082,13 @@ async fn run_sampling_request(
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
-        let prompt = build_prompt(
+        let mut prompt = build_prompt(
             prompt_input,
             router.as_ref(),
             turn_context.as_ref(),
             base_instructions.clone(),
         );
+        prompt.trace_components = sess.prompt_trace_components_for_input(&prompt.input).await;
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),

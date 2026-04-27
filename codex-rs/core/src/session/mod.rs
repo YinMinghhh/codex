@@ -122,6 +122,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
+use codex_rollout_trace::PromptComponent;
 use codex_rollout_trace::RolloutTraceRecorder;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
@@ -139,6 +140,7 @@ use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json::Value;
+use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
@@ -1117,6 +1119,25 @@ impl Session {
         BaseInstructions {
             text: state.session_configuration.base_instructions.clone(),
         }
+    }
+
+    pub(crate) async fn record_prompt_trace_components(&self, components: Vec<PromptComponent>) {
+        if components.is_empty() {
+            return;
+        }
+        let mut state = self.state.lock().await;
+        state.record_prompt_trace_components(components);
+    }
+
+    pub(crate) async fn prompt_trace_components_for_input(
+        &self,
+        input: &[ResponseItem],
+    ) -> Vec<PromptComponent> {
+        let registered_components = {
+            let state = self.state.lock().await;
+            state.prompt_trace_components()
+        };
+        crate::prompt_trace::retarget_components_for_prompt_input(input, &registered_components)
     }
 
     // Merges connector IDs into the session-level explicit connector selection.
@@ -2468,6 +2489,7 @@ impl Session {
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
+        let mut prompt_trace_components = Vec::<PromptComponent>::new();
         let shell = self.user_shell();
         let (
             reference_context_item,
@@ -2491,10 +2513,24 @@ impl Session {
                 turn_context,
             )
         {
-            developer_sections.push(model_switch_message);
+            Self::push_prompt_trace_section(
+                &mut developer_sections,
+                &mut prompt_trace_components,
+                "model_info",
+                "model switch instructions",
+                model_switch_message,
+                json!({
+                    "model": turn_context.model_info.slug,
+                    "previous_model": previous_turn_settings.as_ref().map(|settings| settings.model.as_str()),
+                }),
+            );
         }
         if turn_context.config.include_permissions_instructions {
-            developer_sections.push(
+            Self::push_prompt_trace_section(
+                &mut developer_sections,
+                &mut prompt_trace_components,
+                "initial_context",
+                "permissions instructions",
                 PermissionsInstructions::from_policy(
                     turn_context.sandbox_policy.get(),
                     turn_context.approval_policy.value(),
@@ -2509,6 +2545,11 @@ impl Session {
                         .enabled(Feature::RequestPermissionsTool),
                 )
                 .render(),
+                json!({
+                    "cwd": turn_context.cwd,
+                    "approval_policy": turn_context.approval_policy.value(),
+                    "sandbox_policy": turn_context.sandbox_policy.get(),
+                }),
             );
         }
         let separate_guardian_developer_message =
@@ -2519,7 +2560,16 @@ impl Session {
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
             && !developer_instructions.is_empty()
         {
-            developer_sections.push(developer_instructions.to_string());
+            Self::push_prompt_trace_section(
+                &mut developer_sections,
+                &mut prompt_trace_components,
+                "initial_context",
+                "developer instructions",
+                developer_instructions.to_string(),
+                json!({
+                    "separate_guardian_developer_message": false,
+                }),
+            );
         }
         // Add developer instructions for memories.
         if turn_context.features.enabled(Feature::MemoryTool)
@@ -2527,20 +2577,47 @@ impl Session {
             && let Some(memory_prompt) =
                 build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
         {
-            developer_sections.push(memory_prompt);
+            Self::push_prompt_trace_section(
+                &mut developer_sections,
+                &mut prompt_trace_components,
+                "memory",
+                "memory tool developer instructions",
+                memory_prompt,
+                json!({
+                    "codex_home": turn_context.config.codex_home,
+                }),
+            );
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
             CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
         {
-            developer_sections.push(collab_instructions.render());
+            Self::push_prompt_trace_section(
+                &mut developer_sections,
+                &mut prompt_trace_components,
+                "collaboration_mode",
+                "collaboration mode instructions",
+                collab_instructions.render(),
+                json!({
+                    "mode": format!("{:?}", collaboration_mode.mode),
+                }),
+            );
         }
         if let Some(realtime_update) = crate::context_manager::updates::build_initial_realtime_item(
             reference_context_item.as_ref(),
             previous_turn_settings.as_ref(),
             turn_context,
         ) {
-            developer_sections.push(realtime_update);
+            Self::push_prompt_trace_section(
+                &mut developer_sections,
+                &mut prompt_trace_components,
+                "realtime",
+                "realtime context update",
+                realtime_update,
+                json!({
+                    "realtime_active": turn_context.realtime_active,
+                }),
+            );
         }
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
@@ -2555,8 +2632,17 @@ impl Session {
                         personality,
                     )
             {
-                developer_sections
-                    .push(PersonalitySpecInstructions::new(personality_message).render());
+                Self::push_prompt_trace_section(
+                    &mut developer_sections,
+                    &mut prompt_trace_components,
+                    "model_info",
+                    "personality instructions",
+                    PersonalitySpecInstructions::new(personality_message).render(),
+                    json!({
+                        "model": model_info.slug,
+                        "personality": format!("{:?}", personality),
+                    }),
+                );
             }
         }
         if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
@@ -2570,7 +2656,16 @@ impl Session {
             if let Some(apps_instructions) =
                 AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
             {
-                developer_sections.push(apps_instructions.render());
+                Self::push_prompt_trace_section(
+                    &mut developer_sections,
+                    &mut prompt_trace_components,
+                    "apps",
+                    "apps/connectors instructions",
+                    apps_instructions.render(),
+                    json!({
+                        "connector_count": accessible_and_enabled_connectors.len(),
+                    }),
+                );
             }
         }
         if turn_context.config.include_skill_instructions {
@@ -2597,7 +2692,16 @@ impl Session {
                     })
                     .await;
                 }
-                developer_sections.push(skills_instructions.render());
+                Self::push_prompt_trace_section(
+                    &mut developer_sections,
+                    &mut prompt_trace_components,
+                    "skills",
+                    "available skills instructions",
+                    skills_instructions.render(),
+                    json!({
+                        "implicit_skill_count": implicit_skills.len(),
+                    }),
+                );
             }
         }
         let loaded_plugins = self
@@ -2608,22 +2712,47 @@ impl Session {
         if let Some(plugin_instructions) =
             AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
         {
-            developer_sections.push(plugin_instructions.render());
+            Self::push_prompt_trace_section(
+                &mut developer_sections,
+                &mut prompt_trace_components,
+                "plugins",
+                "available plugins instructions",
+                plugin_instructions.render(),
+                json!({
+                    "plugin_count": loaded_plugins.capability_summaries().len(),
+                }),
+            );
         }
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
                 turn_context.config.commit_attribution.as_deref(),
             )
         {
-            developer_sections.push(commit_message_instruction);
+            Self::push_prompt_trace_section(
+                &mut developer_sections,
+                &mut prompt_trace_components,
+                "git",
+                "commit attribution instructions",
+                commit_message_instruction,
+                json!({
+                    "commit_attribution": turn_context.config.commit_attribution,
+                }),
+            );
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            contextual_user_sections.push(
+            Self::push_prompt_trace_section(
+                &mut contextual_user_sections,
+                &mut prompt_trace_components,
+                "agents_md",
+                "user/project instructions",
                 UserInstructions {
                     text: user_instructions.to_string(),
                     directory: turn_context.cwd.to_string_lossy().into_owned(),
                 }
                 .render(),
+                json!({
+                    "cwd": turn_context.cwd,
+                }),
             );
         }
         if turn_context.config.include_environment_context {
@@ -2632,10 +2761,17 @@ impl Session {
                 .agent_control
                 .format_environment_context_subagents(self.conversation_id)
                 .await;
-            contextual_user_sections.push(
+            Self::push_prompt_trace_section(
+                &mut contextual_user_sections,
+                &mut prompt_trace_components,
+                "initial_context",
+                "environment context",
                 crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
                     .with_subagents(subagents)
                     .render(),
+                json!({
+                    "cwd": turn_context.cwd,
+                }),
             );
         }
 
@@ -2660,8 +2796,18 @@ impl Session {
                     developer_instructions.to_string(),
                 ])
         {
+            prompt_trace_components.push(crate::prompt_trace::text_component(
+                "initial_context",
+                "guardian developer instructions",
+                developer_instructions,
+                json!({
+                    "separate_guardian_developer_message": true,
+                }),
+            ));
             items.push(guardian_developer_message);
         }
+        self.record_prompt_trace_components(prompt_trace_components)
+            .await;
         items
     }
 
@@ -2675,6 +2821,20 @@ impl Session {
         {
             error!("failed to record rollout items: {e:#}");
         }
+    }
+
+    fn push_prompt_trace_section(
+        sections: &mut Vec<String>,
+        prompt_trace_components: &mut Vec<PromptComponent>,
+        source: &'static str,
+        label: &'static str,
+        text: String,
+        metadata: Value,
+    ) {
+        prompt_trace_components.push(crate::prompt_trace::text_component(
+            source, label, &text, metadata,
+        ));
+        sections.push(text);
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {

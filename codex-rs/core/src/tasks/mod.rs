@@ -48,6 +48,7 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_rollout_trace::ExecutionStatus;
 
 use codex_features::Feature;
 pub(crate) use compact::CompactTask;
@@ -264,6 +265,10 @@ impl Session {
             .turn_timing_state
             .mark_turn_started(started_at)
             .await;
+        self.services.rollout_trace.record_codex_turn_started(
+            self.conversation_id.to_string(),
+            turn_context.sub_id.clone(),
+        );
         let token_usage_at_turn_start = self.total_token_usage().await.unwrap_or_default();
 
         let cancellation_token = CancellationToken::new();
@@ -607,6 +612,9 @@ impl Session {
             duration_ms,
             time_to_first_token_ms,
         });
+        self.services
+            .rollout_trace
+            .record_codex_turn_ended(turn_context.sub_id.clone(), ExecutionStatus::Completed);
         self.send_event(turn_context.as_ref(), event).await;
         self.services
             .guardian_rejection_circuit_breaker
@@ -692,18 +700,29 @@ impl Session {
             .turn_timing_state
             .completed_at_and_duration_ms()
             .await;
+        let trace_status = execution_status_for_abort_reason(&reason);
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some(task.turn_context.sub_id.clone()),
             reason,
             completed_at,
             duration_ms,
         });
+        self.services
+            .rollout_trace
+            .record_codex_turn_ended(task.turn_context.sub_id.clone(), trace_status);
         self.send_event(task.turn_context.as_ref(), event).await;
         self.services
             .guardian_rejection_circuit_breaker
             .lock()
             .await
             .clear_turn(&task.turn_context.sub_id);
+    }
+}
+
+fn execution_status_for_abort_reason(reason: &TurnAbortReason) -> ExecutionStatus {
+    match reason {
+        TurnAbortReason::Interrupted => ExecutionStatus::Cancelled,
+        TurnAbortReason::Replaced | TurnAbortReason::ReviewEnded => ExecutionStatus::Aborted,
     }
 }
 
