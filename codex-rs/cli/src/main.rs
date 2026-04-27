@@ -208,6 +208,12 @@ enum DebugSubcommand {
     /// Render the raw model catalog as JSON.
     Models(DebugModelsCommand),
 
+    /// Serve the local rollout trace web viewer.
+    TraceViewer(DebugTraceViewerCommand),
+
+    /// Reduce one rollout trace bundle to a standalone JSON state file.
+    TraceReduce(DebugTraceReduceCommand),
+
     /// Tooling: helps debug the app server.
     AppServer(DebugAppServerCommand),
 
@@ -253,6 +259,36 @@ struct DebugModelsCommand {
     /// Skip refresh and dump only the bundled catalog shipped with this binary.
     #[arg(long = "bundled", default_value_t = false)]
     bundled: bool,
+}
+
+#[derive(Debug, Parser)]
+struct DebugTraceViewerCommand {
+    /// Directory containing rollout trace bundles.
+    #[arg(long = "trace-root", value_name = "DIR", conflicts_with = "bundle")]
+    trace_root: Option<PathBuf>,
+
+    /// Single rollout trace bundle to serve as `current`.
+    #[arg(long = "bundle", value_name = "DIR", conflicts_with = "trace_root")]
+    bundle: Option<PathBuf>,
+
+    /// Local port to bind. Use 0 to pick a free port.
+    #[arg(long = "port", default_value_t = 0)]
+    port: u16,
+
+    /// Ask the OS to open the viewer URL after binding.
+    #[arg(long = "open", default_value_t = false)]
+    open: bool,
+}
+
+#[derive(Debug, Parser)]
+struct DebugTraceReduceCommand {
+    /// Rollout trace bundle directory.
+    #[arg(value_name = "BUNDLE")]
+    bundle: PathBuf,
+
+    /// Output path for the reduced JSON state.
+    #[arg(long = "output", short = 'o', value_name = "FILE")]
+    output: PathBuf,
 }
 
 #[derive(Debug, Parser)]
@@ -592,6 +628,20 @@ async fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Res
                 .await
         }
     }
+}
+
+async fn run_debug_trace_viewer_command(cmd: DebugTraceViewerCommand) -> anyhow::Result<()> {
+    codex_trace_viewer::serve(codex_trace_viewer::TraceViewerConfig {
+        trace_root: cmd.trace_root,
+        bundle: cmd.bundle,
+        port: cmd.port,
+        open: cmd.open,
+    })
+    .await
+}
+
+fn run_debug_trace_reduce_command(cmd: DebugTraceReduceCommand) -> anyhow::Result<()> {
+    codex_trace_viewer::reduce_bundle_to_path(&cmd.bundle, &cmd.output)
 }
 
 #[derive(Debug, Default, Parser, Clone)]
@@ -1023,6 +1073,22 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     "debug app-server",
                 )?;
                 run_debug_app_server_command(cmd).await?;
+            }
+            DebugSubcommand::TraceViewer(cmd) => {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "debug trace-viewer",
+                )?;
+                run_debug_trace_viewer_command(cmd).await?;
+            }
+            DebugSubcommand::TraceReduce(cmd) => {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "debug trace-reduce",
+                )?;
+                run_debug_trace_reduce_command(cmd)?;
             }
             DebugSubcommand::PromptInput(cmd) => {
                 reject_remote_mode_for_subcommand(
@@ -1762,6 +1828,54 @@ mod tests {
         };
 
         assert!(cmd.bundled);
+    }
+
+    #[test]
+    fn debug_trace_viewer_parses_bundle_mode() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "debug",
+            "trace-viewer",
+            "--bundle",
+            "/tmp/trace-bundle",
+            "--port",
+            "8765",
+        ])
+        .expect("parse");
+
+        let Some(Subcommand::Debug(DebugCommand {
+            subcommand: DebugSubcommand::TraceViewer(cmd),
+        })) = cli.subcommand
+        else {
+            panic!("expected debug trace-viewer subcommand");
+        };
+
+        assert_eq!(cmd.bundle, Some(PathBuf::from("/tmp/trace-bundle")));
+        assert_eq!(cmd.trace_root, None);
+        assert_eq!(cmd.port, 8765);
+    }
+
+    #[test]
+    fn debug_trace_reduce_parses_output() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "debug",
+            "trace-reduce",
+            "/tmp/trace-bundle",
+            "--output",
+            "/tmp/state.json",
+        ])
+        .expect("parse");
+
+        let Some(Subcommand::Debug(DebugCommand {
+            subcommand: DebugSubcommand::TraceReduce(cmd),
+        })) = cli.subcommand
+        else {
+            panic!("expected debug trace-reduce subcommand");
+        };
+
+        assert_eq!(cmd.bundle, PathBuf::from("/tmp/trace-bundle"));
+        assert_eq!(cmd.output, PathBuf::from("/tmp/state.json"));
     }
 
     #[test]
