@@ -6,12 +6,33 @@ const state = {
   requestPayload: null,
   assemblyPayload: null,
   selectedComponent: null,
+  selectedCategory: null,
   stream: null,
 };
 
 const $ = (id) => document.getElementById(id);
 const LONG_TEXT_LIMIT = 420;
 const LONG_TEXT_PREVIEW = 260;
+const CONTEXT_CATEGORY_ORDER = [
+  "model_scaffold",
+  "tool_schemas",
+  "runtime_context",
+  "project_user_context",
+  "conversation",
+  "tool_io",
+  "model_state",
+  "other",
+];
+const CONTEXT_CATEGORY_LABELS = {
+  model_scaffold: "Model scaffold",
+  tool_schemas: "Tool schemas",
+  runtime_context: "Runtime context",
+  project_user_context: "Project/user context",
+  conversation: "Conversation",
+  tool_io: "Tool I/O",
+  model_state: "Model state",
+  other: "Other",
+};
 
 async function fetchJson(url) {
   const response = await fetch(url);
@@ -116,6 +137,7 @@ async function selectBundle(bundleId) {
   state.requestPayload = null;
   state.assemblyPayload = null;
   state.selectedComponent = null;
+  state.selectedCategory = null;
   renderBundles();
   await loadBundleState();
   startStream();
@@ -258,6 +280,7 @@ async function selectInference(inferenceId) {
 
   state.selectedInferenceId = inferenceId;
   state.selectedComponent = null;
+  state.selectedCategory = null;
   state.requestPayload = null;
   state.assemblyPayload = null;
 
@@ -340,13 +363,20 @@ function renderTools(tools) {
 }
 
 function renderComponents() {
-  const components = state.assemblyPayload?.payload?.components || state.assemblyPayload?.components || [];
+  $("componentGraph").className = "stack";
+  const breakdown = buildContextBreakdown();
+  const components = breakdown.components;
   if (!Array.isArray(components) || components.length === 0) {
     $("componentGraph").innerHTML = `<p class="empty">No prompt assembly trace recorded.</p>`;
     return;
   }
 
-  $("componentGraph").innerHTML = components
+  const filteredComponents = state.selectedCategory
+    ? components.filter((component) => component.category === state.selectedCategory)
+    : components;
+  const bar = renderContextBar(breakdown);
+  const filters = renderContextFilters(breakdown);
+  const cards = filteredComponents
     .map((component) => {
       const selected = state.selectedComponent?.id === component.id ? " selected" : "";
       const source = component.source || "unknown";
@@ -356,14 +386,32 @@ function renderComponents() {
         <button class="component${selected}" data-component="${escapeHtml(component.id)}">
           <div class="timeline-row">
             <span class="kind">${escapeHtml(source)}</span>
-            <span class="muted">${escapeHtml(component.content_hash || "")}</span>
+            <span class="muted">${escapeHtml(CONTEXT_CATEGORY_LABELS[component.category] || component.category)}</span>
           </div>
           <strong>${escapeHtml(label)}</strong>
           <span class="muted">${escapeHtml(target)}</span>
           <p>${escapeHtml(component.preview || "")}</p>
+          <div class="component-stats">
+            <span>${escapeHtml(formatTokens(component.estimatedTokens))} est</span>
+            <span>${escapeHtml(String(component.estimatedBytes))} bytes</span>
+            <span>${escapeHtml(component.content_hash || "")}</span>
+          </div>
         </button>`;
     })
     .join("");
+  $("componentGraph").innerHTML = `
+    <section class="context-breakdown">
+      ${bar}
+      ${filters}
+    </section>
+    <div class="component-grid">${cards}</div>`;
+
+  $("componentGraph").querySelectorAll("button.context-segment, button.context-filter").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedCategory = button.dataset.category || null;
+      renderComponents();
+    });
+  });
 
   $("componentGraph").querySelectorAll("button.component").forEach((button) => {
     button.addEventListener("click", () => {
@@ -372,6 +420,195 @@ function renderComponents() {
       renderInspector();
     });
   });
+}
+
+function buildContextBreakdown() {
+  const rawComponents = state.assemblyPayload?.payload?.components || state.assemblyPayload?.components || [];
+  const request = state.requestPayload?.payload || state.requestPayload || {};
+  const components = Array.isArray(rawComponents)
+    ? rawComponents.map((component) => {
+        const pointer = component.target?.request_json_pointer || "";
+        const value = jsonPointerGet(request, pointer);
+        const exists = value !== undefined;
+        const fragment = exists ? value : null;
+        const estimatedBytes = estimateValueBytes(fragment, exists);
+        return {
+          ...component,
+          category: contextCategory(component, fragment),
+          value: fragment,
+          estimatedBytes,
+          estimatedTokens: bytesToEstimatedTokens(estimatedBytes),
+        };
+      })
+    : [];
+  const segments = CONTEXT_CATEGORY_ORDER
+    .map((category) => {
+      const categoryComponents = components.filter((component) => component.category === category);
+      const estimatedTokens = categoryComponents.reduce((sum, component) => sum + component.estimatedTokens, 0);
+      const estimatedBytes = categoryComponents.reduce((sum, component) => sum + component.estimatedBytes, 0);
+      return {
+        category,
+        label: CONTEXT_CATEGORY_LABELS[category],
+        estimatedTokens,
+        estimatedBytes,
+      };
+    })
+    .filter((segment) => segment.estimatedTokens > 0 || segment.estimatedBytes > 0);
+  return {
+    components,
+    segments,
+    estimatedTotalTokens: components.reduce((sum, component) => sum + component.estimatedTokens, 0),
+  };
+}
+
+function renderContextBar(breakdown) {
+  const total = Math.max(1, breakdown.estimatedTotalTokens);
+  const segments = breakdown.segments
+    .map((segment) => {
+      const width = Math.max(2, (segment.estimatedTokens / total) * 100);
+      const selected = state.selectedCategory === segment.category ? " selected" : "";
+      const title = `${segment.label}: ${formatTokens(segment.estimatedTokens)} estimated tokens`;
+      return `<button class="context-segment ${segment.category}${selected}" data-category="${escapeHtml(segment.category)}" style="--segment-width:${width}%" title="${escapeHtml(title)}"></button>`;
+    })
+    .join("");
+  return `
+    <div class="context-summary">
+      <strong>Context composition</strong>
+      <span>${escapeHtml(formatTokens(breakdown.estimatedTotalTokens))} estimated tokens from traced components</span>
+    </div>
+    <div class="context-bar">${segments}</div>`;
+}
+
+function renderContextFilters(breakdown) {
+  const allSelected = state.selectedCategory ? "" : " selected";
+  const filters = breakdown.segments
+    .map((segment) => {
+      const selected = state.selectedCategory === segment.category ? " selected" : "";
+      return `
+        <button class="context-filter${selected}" data-category="${escapeHtml(segment.category)}">
+          <span class="dot ${escapeHtml(segment.category)}"></span>
+          ${escapeHtml(segment.label)}
+          <span>${escapeHtml(formatTokens(segment.estimatedTokens))}</span>
+        </button>`;
+    })
+    .join("");
+  return `
+    <div class="context-filters">
+      <button class="context-segment context-filter${allSelected}" data-category="">All</button>
+      ${filters}
+    </div>`;
+}
+
+function jsonPointerGet(value, pointer) {
+  if (!pointer) {
+    return value;
+  }
+  if (!pointer.startsWith("/")) {
+    return undefined;
+  }
+  return pointer
+    .slice(1)
+    .split("/")
+    .map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"))
+    .reduce((current, part) => {
+      if (current === undefined || current === null) {
+        return undefined;
+      }
+      return current[part];
+    }, value);
+}
+
+function estimateValueBytes(value, exists) {
+  if (!exists) {
+    return 0;
+  }
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return new TextEncoder().encode(text || "").length;
+}
+
+function bytesToEstimatedTokens(bytes) {
+  return Math.ceil(bytes / 4);
+}
+
+function contextCategory(component, value) {
+  const pointer = component.target?.request_json_pointer || "";
+  const source = component.source || "";
+  if (pointer.startsWith("/tools/") || source === "built_tools") {
+    return "tool_schemas";
+  }
+  if (["model_info", "base_instructions", "build_responses_request"].includes(source)) {
+    return "model_scaffold";
+  }
+  if (["initial_context", "permissions", "environment", "collaboration_mode", "realtime", "git"].includes(source)) {
+    return "runtime_context";
+  }
+  if (["agents_md", "memory", "skills", "plugins", "apps"].includes(source)) {
+    return "project_user_context";
+  }
+  if (["tool_io", "tool_output", "function_call_output", "custom_tool_call_output", "browser_output", "shell_output"].includes(source)) {
+    return "tool_io";
+  }
+  if (["model_state", "reasoning", "compaction", "encrypted_state"].includes(source)) {
+    return "model_state";
+  }
+  if (source === "conversation_history") {
+    return conversationCategory(value);
+  }
+  return "other";
+}
+
+function conversationCategory(value) {
+  if (jsonContainsMarker(value, isToolIoMarker)) {
+    return "tool_io";
+  }
+  if (jsonContainsMarker(value, isModelStateMarker)) {
+    return "model_state";
+  }
+  return "conversation";
+}
+
+function jsonContainsMarker(value, predicate) {
+  if (typeof value === "string") {
+    return predicate(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => jsonContainsMarker(item, predicate));
+  }
+  if (isPlainObject(value)) {
+    return Object.entries(value).some(([key, child]) => predicate(key) || jsonContainsMarker(child, predicate));
+  }
+  return false;
+}
+
+function isToolIoMarker(value) {
+  return [
+    "function_call",
+    "function_call_output",
+    "custom_tool_call",
+    "custom_tool_call_output",
+    "local_shell_call",
+    "local_shell_call_output",
+    "mcp_tool_call",
+    "mcp_tool_call_output",
+    "tool_call",
+    "tool_call_output",
+    "shell",
+    "browser",
+  ].includes(value);
+}
+
+function isModelStateMarker(value) {
+  return ["reasoning", "reasoning_summary", "compaction", "encrypted_reasoning", "encrypted_state"].includes(value);
+}
+
+function formatTokens(value) {
+  if (!Number.isFinite(value)) {
+    return "0";
+  }
+  if (Math.abs(value) < 1000) {
+    return String(value);
+  }
+  return Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 function renderTarget(target) {
@@ -394,15 +631,22 @@ function renderTarget(target) {
 function renderInspector() {
   const inspector = $("inspector");
   if (state.selectedComponent) {
+    const target = state.selectedComponent.target ? renderTarget(state.selectedComponent.target) : "";
     inspector.innerHTML = `
       <h3>Component</h3>
       ${renderRows({
         id: state.selectedComponent.id,
+        category: CONTEXT_CATEGORY_LABELS[state.selectedComponent.category] || state.selectedComponent.category,
         source: state.selectedComponent.source,
         label: state.selectedComponent.label,
-        target: state.selectedComponent.target ? renderTarget(state.selectedComponent.target) : "",
+        target,
         hash: state.selectedComponent.content_hash,
+        estimatedTokens: state.selectedComponent.estimatedTokens,
+        estimatedBytes: state.selectedComponent.estimatedBytes,
       })}
+      <h4>Final request fragment</h4>
+      ${renderJsonPanel(state.selectedComponent.value, "Final request fragment")}
+      <h4>Prompt component metadata</h4>
       ${renderJsonPanel(state.selectedComponent, "Prompt component")}`;
     return;
   }
