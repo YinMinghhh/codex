@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Trace Viewer</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="topbar">
+          <h1>Codex Trace</h1>
+          <button id="refresh" title="Refresh bundles">Refresh</button>
+        </div>
+        <p class="warning">Local debug viewer. Trace payloads can contain prompts, secrets, file paths, tool output, and API responses.</p>
+        <div id="bundleList" class="bundle-list"></div>
+        <h2>Timeline</h2>
+        <div id="timeline" class="timeline"></div>
+      </aside>
+      <main class="request-pane">
+        <div class="request-header">
+          <div>
+            <h2 id="requestTitle">No inference selected</h2>
+            <p id="requestMeta" class="muted"></p>
+          </div>
+          <button id="copyJson" title="Copy final request JSON">Copy JSON</button>
+        </div>
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="json">Final JSON</button>
+          <button class="tab" data-tab="input">Input</button>
+          <button class="tab" data-tab="tools">Tools</button>
+          <button class="tab" data-tab="components">Components</button>
+        </div>
+        <section id="jsonTab" class="tab-panel active">
+          <div class="json-actions">
+            <div class="json-action-group">
+              <button id="collapseJson" title="Collapse every object and array">Collapse all</button>
+              <button id="expandJson" title="Expand every object and array">Expand all</button>
+              <button id="collapseLongText" title="Collapse every long string in this JSON">Collapse text</button>
+              <button id="expandLongText" title="Expand every long string in this JSON">Expand text</button>
+            </div>
+            <button id="fullscreenJson" title="Open final request JSON in full screen">Full screen</button>
+          </div>
+          <div class="json-panel" data-json-title="Final request JSON">
+            <div id="requestJson" class="json-viewer"></div>
+          </div>
+        </section>
+        <section id="inputTab" class="tab-panel">
+          <div id="inputList" class="stack"></div>
+        </section>
+        <section id="toolsTab" class="tab-panel">
+          <div id="toolList" class="stack"></div>
+        </section>
+        <section id="componentsTab" class="tab-panel">
+          <div id="componentGraph" class="component-grid"></div>
+        </section>
+      </main>
+      <aside class="inspector">
+        <h2>Inspector</h2>
+        <div id="inspector" class="inspector-body muted">Select a request, payload, or component.</div>
+      </aside>
+    </div>
+    <div id="jsonModal" class="json-modal" hidden role="dialog" aria-modal="true" aria-labelledby="jsonModalTitle">
+      <div class="json-modal-surface">
+        <div class="json-modal-header">
+          <strong id="jsonModalTitle">JSON Preview</strong>
+          <div class="json-action-group">
+            <button id="collapseModalJson" title="Collapse every object and array">Collapse all</button>
+            <button id="expandModalJson" title="Expand every object and array">Expand all</button>
+            <button id="collapseModalLongText" title="Collapse every long string in this JSON">Collapse text</button>
+            <button id="expandModalLongText" title="Expand every long string in this JSON">Expand text</button>
+            <button id="closeJsonModal" title="Close full screen preview">Close</button>
+          </div>
+        </div>
+        <div id="jsonModalBody" class="json-viewer modal-viewer"></div>
+      </div>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>

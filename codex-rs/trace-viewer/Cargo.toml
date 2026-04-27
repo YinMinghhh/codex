@@ -1,0 +1,26 @@
+[package]
+name = "codex-trace-viewer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+name = "codex_trace_viewer"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
+codex-rollout-trace = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["fs", "net", "time"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

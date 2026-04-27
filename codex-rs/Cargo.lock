@@ -2118,6 +2118,7 @@ dependencies = [
  "codex-state",
  "codex-stdio-to-uds",
  "codex-terminal-detection",
+ "codex-trace-viewer",
  "codex-tui",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
@@ -3393,6 +3394,21 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "codex-trace-viewer"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "axum",
+ "codex-rollout-trace",
+ "futures",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
