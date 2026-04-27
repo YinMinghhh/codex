@@ -334,6 +334,9 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Context => {
+                self.add_context_window_output();
+            }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
             }
@@ -719,6 +722,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Fast
             | SlashCommand::Status
+            | SlashCommand::Context
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

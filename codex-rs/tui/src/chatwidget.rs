@@ -7675,6 +7675,11 @@ impl ChatWidget {
         self.add_to_history(cell);
     }
 
+    pub(crate) fn add_context_window_output(&mut self) {
+        let cell = crate::context_window::new_context_window_output(self.token_info.as_ref());
+        self.add_to_history(cell);
+    }
+
     pub(crate) fn finish_status_rate_limit_refresh(&mut self, request_id: u64) {
         if self.refreshing_status_outputs.is_empty() {
             return;
