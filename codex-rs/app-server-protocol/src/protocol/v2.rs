@@ -59,8 +59,10 @@ use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::ContextWindowBreakdown as CoreContextWindowBreakdown;
 use codex_protocol::protocol::ContextWindowCategory as CoreContextWindowCategory;
 use codex_protocol::protocol::ContextWindowComponent as CoreContextWindowComponent;
+use codex_protocol::protocol::ContextWindowMappingConfidence as CoreContextWindowMappingConfidence;
 use codex_protocol::protocol::ContextWindowSegment as CoreContextWindowSegment;
 use codex_protocol::protocol::ContextWindowTarget as CoreContextWindowTarget;
+use codex_protocol::protocol::ContextWindowTextRange as CoreContextWindowTextRange;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandSource as CoreExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
@@ -4706,6 +4708,10 @@ pub struct ThreadContextWindowComponent {
     pub source: String,
     pub label: String,
     pub target: ThreadContextWindowTarget,
+    #[ts(type = "ThreadContextWindowMappingConfidence | null")]
+    pub mapping_confidence: Option<ThreadContextWindowMappingConfidence>,
+    #[serde(default)]
+    pub assembly_step_ids: Vec<String>,
     #[ts(type = "number")]
     pub estimated_tokens: i64,
     #[ts(type = "number")]
@@ -4723,6 +4729,8 @@ impl From<CoreContextWindowComponent> for ThreadContextWindowComponent {
             source: value.source,
             label: value.label,
             target: value.target.into(),
+            mapping_confidence: value.mapping_confidence.map(Into::into),
+            assembly_step_ids: value.assembly_step_ids,
             estimated_tokens: value.estimated_tokens,
             estimated_bytes: value.estimated_bytes,
             content_hash: value.content_hash,
@@ -4739,6 +4747,8 @@ impl From<ThreadContextWindowComponent> for CoreContextWindowComponent {
             source: value.source,
             label: value.label,
             target: value.target.into(),
+            mapping_confidence: value.mapping_confidence.map(Into::into),
+            assembly_step_ids: value.assembly_step_ids,
             estimated_tokens: value.estimated_tokens,
             estimated_bytes: value.estimated_bytes,
             content_hash: value.content_hash,
@@ -4758,6 +4768,8 @@ pub struct ThreadContextWindowTarget {
     pub content_index: Option<usize>,
     #[ts(type = "string | null")]
     pub tool_name: Option<String>,
+    #[ts(type = "ThreadContextWindowTextRange | null")]
+    pub text_range: Option<ThreadContextWindowTextRange>,
 }
 
 impl From<CoreContextWindowTarget> for ThreadContextWindowTarget {
@@ -4767,6 +4779,7 @@ impl From<CoreContextWindowTarget> for ThreadContextWindowTarget {
             input_index: value.input_index,
             content_index: value.content_index,
             tool_name: value.tool_name,
+            text_range: value.text_range.map(Into::into),
         }
     }
 }
@@ -4778,6 +4791,75 @@ impl From<ThreadContextWindowTarget> for CoreContextWindowTarget {
             input_index: value.input_index,
             content_index: value.content_index,
             tool_name: value.tool_name,
+            text_range: value.text_range.map(Into::into),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadContextWindowTextRange {
+    #[ts(type = "number")]
+    pub start_byte: usize,
+    #[ts(type = "number")]
+    pub end_byte: usize,
+    #[ts(type = "number")]
+    pub start_char: usize,
+    #[ts(type = "number")]
+    pub end_char: usize,
+}
+
+impl From<CoreContextWindowTextRange> for ThreadContextWindowTextRange {
+    fn from(value: CoreContextWindowTextRange) -> Self {
+        Self {
+            start_byte: value.start_byte,
+            end_byte: value.end_byte,
+            start_char: value.start_char,
+            end_char: value.end_char,
+        }
+    }
+}
+
+impl From<ThreadContextWindowTextRange> for CoreContextWindowTextRange {
+    fn from(value: ThreadContextWindowTextRange) -> Self {
+        Self {
+            start_byte: value.start_byte,
+            end_byte: value.end_byte,
+            start_char: value.start_char,
+            end_char: value.end_char,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/", rename_all = "snake_case")]
+pub enum ThreadContextWindowMappingConfidence {
+    ExactRange,
+    ExactValue,
+    Derived,
+    ClassifiedFallback,
+}
+
+impl From<CoreContextWindowMappingConfidence> for ThreadContextWindowMappingConfidence {
+    fn from(value: CoreContextWindowMappingConfidence) -> Self {
+        match value {
+            CoreContextWindowMappingConfidence::ExactRange => Self::ExactRange,
+            CoreContextWindowMappingConfidence::ExactValue => Self::ExactValue,
+            CoreContextWindowMappingConfidence::Derived => Self::Derived,
+            CoreContextWindowMappingConfidence::ClassifiedFallback => Self::ClassifiedFallback,
+        }
+    }
+}
+
+impl From<ThreadContextWindowMappingConfidence> for CoreContextWindowMappingConfidence {
+    fn from(value: ThreadContextWindowMappingConfidence) -> Self {
+        match value {
+            ThreadContextWindowMappingConfidence::ExactRange => Self::ExactRange,
+            ThreadContextWindowMappingConfidence::ExactValue => Self::ExactValue,
+            ThreadContextWindowMappingConfidence::Derived => Self::Derived,
+            ThreadContextWindowMappingConfidence::ClassifiedFallback => Self::ClassifiedFallback,
         }
     }
 }

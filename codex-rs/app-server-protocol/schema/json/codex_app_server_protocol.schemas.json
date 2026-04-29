@@ -14358,6 +14358,13 @@
       },
       "ThreadContextWindowComponent": {
         "properties": {
+          "assemblyStepIds": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "category": {
             "$ref": "#/definitions/v2/ThreadContextWindowCategory"
           },
@@ -14377,6 +14384,16 @@
           },
           "label": {
             "type": "string"
+          },
+          "mappingConfidence": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadContextWindowMappingConfidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "source": {
             "type": "string"
@@ -14398,6 +14415,15 @@
           "value"
         ],
         "type": "object"
+      },
+      "ThreadContextWindowMappingConfidence": {
+        "enum": [
+          "exact_range",
+          "exact_value",
+          "derived",
+          "classified_fallback"
+        ],
+        "type": "string"
       },
       "ThreadContextWindowSegment": {
         "properties": {
@@ -14452,6 +14478,16 @@
           "requestJsonPointer": {
             "type": "string"
           },
+          "textRange": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadContextWindowTextRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "toolName": {
             "type": [
               "string",
@@ -14461,6 +14497,37 @@
         },
         "required": [
           "requestJsonPointer"
+        ],
+        "type": "object"
+      },
+      "ThreadContextWindowTextRange": {
+        "properties": {
+          "endByte": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "endChar": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "startByte": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "startChar": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "endByte",
+          "endChar",
+          "startByte",
+          "startChar"
         ],
         "type": "object"
       },

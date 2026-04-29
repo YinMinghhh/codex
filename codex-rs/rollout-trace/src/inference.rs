@@ -410,6 +410,8 @@ mod tests {
                 model_info: json!({ "slug": "gpt-test" }),
                 base_instructions: "base".to_string(),
                 components: Vec::new(),
+                assembly_steps: Vec::new(),
+                mappings: Vec::new(),
                 final_request_payload_id: String::new(),
             }),
         );

@@ -180,6 +180,15 @@ pub struct PromptComponent {
     pub metadata: serde_json::Value,
 }
 
+/// Byte and character offsets inside one target string in the final request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptTextRange {
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub start_char: usize,
+    pub end_char: usize,
+}
+
 /// Location in the final request affected by a [`PromptComponent`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptTarget {
@@ -222,6 +231,37 @@ impl PromptTarget {
     }
 }
 
+/// One assembly operation that moved or derived prompt data for a final request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptAssemblyStep {
+    pub id: String,
+    pub source: String,
+    pub label: String,
+    pub target: PromptTarget,
+    pub metadata: serde_json::Value,
+}
+
+/// Confidence level for a prompt-to-request mapping.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptMappingConfidence {
+    ExactRange,
+    ExactValue,
+    Derived,
+    ClassifiedFallback,
+}
+
+/// Mapping from one prompt component through assembly steps into the final request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptAssemblyMapping {
+    pub component_id: String,
+    pub step_ids: Vec<String>,
+    pub target: PromptTarget,
+    pub text_range: Option<PromptTextRange>,
+    pub confidence: PromptMappingConfidence,
+    pub preview: String,
+}
+
 /// Trace-only prompt/request provenance for one inference call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptAssemblyTrace {
@@ -230,6 +270,10 @@ pub struct PromptAssemblyTrace {
     pub model_info: serde_json::Value,
     pub base_instructions: String,
     pub components: Vec<PromptComponent>,
+    #[serde(default)]
+    pub assembly_steps: Vec<PromptAssemblyStep>,
+    #[serde(default)]
+    pub mappings: Vec<PromptAssemblyMapping>,
     pub final_request_payload_id: RawPayloadId,
 }
 

@@ -2404,6 +2404,10 @@ pub struct ContextWindowComponent {
     pub source: String,
     pub label: String,
     pub target: ContextWindowTarget,
+    #[ts(type = "ContextWindowMappingConfidence | null")]
+    pub mapping_confidence: Option<ContextWindowMappingConfidence>,
+    #[serde(default)]
+    pub assembly_step_ids: Vec<String>,
     #[ts(type = "number")]
     pub estimated_tokens: i64,
     #[ts(type = "number")]
@@ -2422,6 +2426,30 @@ pub struct ContextWindowTarget {
     pub content_index: Option<usize>,
     #[ts(type = "string | null")]
     pub tool_name: Option<String>,
+    #[ts(type = "ContextWindowTextRange | null")]
+    pub text_range: Option<ContextWindowTextRange>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ContextWindowTextRange {
+    #[ts(type = "number")]
+    pub start_byte: usize,
+    #[ts(type = "number")]
+    pub end_byte: usize,
+    #[ts(type = "number")]
+    pub start_char: usize,
+    #[ts(type = "number")]
+    pub end_char: usize,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ContextWindowMappingConfidence {
+    ExactRange,
+    ExactValue,
+    Derived,
+    ClassifiedFallback,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -5570,7 +5598,10 @@ mod tests {
                     input_index: None,
                     content_index: None,
                     tool_name: Some("shell".to_string()),
+                    text_range: None,
                 },
+                mapping_confidence: None,
+                assembly_step_ids: Vec::new(),
                 estimated_tokens: 25,
                 estimated_bytes: 100,
                 content_hash: "fnv1a64:0000000000000000".to_string(),

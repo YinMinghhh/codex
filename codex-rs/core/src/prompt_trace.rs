@@ -13,11 +13,17 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::ContextWindowBreakdown;
 use codex_protocol::protocol::ContextWindowCategory;
 use codex_protocol::protocol::ContextWindowComponent;
+use codex_protocol::protocol::ContextWindowMappingConfidence;
 use codex_protocol::protocol::ContextWindowSegment;
 use codex_protocol::protocol::ContextWindowTarget;
+use codex_protocol::protocol::ContextWindowTextRange;
+use codex_rollout_trace::PromptAssemblyMapping;
+use codex_rollout_trace::PromptAssemblyStep;
 use codex_rollout_trace::PromptAssemblyTrace;
 use codex_rollout_trace::PromptComponent;
+use codex_rollout_trace::PromptMappingConfidence;
 use codex_rollout_trace::PromptTarget;
+use codex_rollout_trace::PromptTextRange;
 use serde_json::Value;
 use serde_json::json;
 
@@ -129,6 +135,7 @@ pub(crate) fn build_prompt_assembly_trace(
     ));
     components.extend(components_for_tools(request.get("tools")));
     components.extend(components_for_request_settings(&request, transport));
+    let (assembly_steps, mappings) = build_assembly_mappings(&request, &components);
 
     PromptAssemblyTrace {
         inference_call_id: String::new(),
@@ -140,6 +147,8 @@ pub(crate) fn build_prompt_assembly_trace(
         }),
         base_instructions: prompt.base_instructions.text.clone(),
         components,
+        assembly_steps,
+        mappings,
         final_request_payload_id: String::new(),
     }
 }
@@ -155,11 +164,24 @@ pub(crate) fn build_context_window_breakdown(
             "serialization_error": err.to_string(),
         })
     });
+    let mut mappings_by_component = HashMap::<String, VecDeque<&PromptAssemblyMapping>>::new();
+    for mapping in &trace.mappings {
+        mappings_by_component
+            .entry(mapping.component_id.clone())
+            .or_default()
+            .push_back(mapping);
+    }
     let mut components = Vec::new();
     let mut seen_targets = HashSet::<String>::new();
 
     for component in &trace.components {
-        let pointer = &component.target.request_json_pointer;
+        let mapping = mappings_by_component
+            .get_mut(&component.id)
+            .and_then(VecDeque::pop_front);
+        let target = mapping
+            .map(|mapping| &mapping.target)
+            .unwrap_or(&component.target);
+        let pointer = &target.request_json_pointer;
         let value_exists = request.pointer(pointer).is_some();
         let value = request.pointer(pointer).cloned().unwrap_or(Value::Null);
         let estimated_bytes = value_estimated_bytes(&value, value_exists);
@@ -173,10 +195,17 @@ pub(crate) fn build_context_window_breakdown(
             label: component.label.clone(),
             target: ContextWindowTarget {
                 request_json_pointer: pointer.clone(),
-                input_index: component.target.input_index,
-                content_index: component.target.content_index,
-                tool_name: component.target.tool_name.clone(),
+                input_index: target.input_index,
+                content_index: target.content_index,
+                tool_name: target.tool_name.clone(),
+                text_range: mapping
+                    .and_then(|mapping| mapping.text_range.as_ref().map(context_window_text_range)),
             },
+            mapping_confidence: mapping
+                .map(|mapping| context_window_mapping_confidence(&mapping.confidence)),
+            assembly_step_ids: mapping
+                .map(|mapping| mapping.step_ids.clone())
+                .unwrap_or_default(),
             estimated_tokens,
             estimated_bytes,
             content_hash: component.content_hash.clone(),
@@ -226,6 +255,113 @@ pub(crate) fn build_context_window_breakdown(
     .with_reported_input_tokens(reported_input_tokens)
 }
 
+fn build_assembly_mappings(
+    request: &Value,
+    components: &[PromptComponent],
+) -> (Vec<PromptAssemblyStep>, Vec<PromptAssemblyMapping>) {
+    components
+        .iter()
+        .enumerate()
+        .map(|(index, component)| {
+            let step = PromptAssemblyStep {
+                id: format!("step:{index}"),
+                source: component.source.clone(),
+                label: component.label.clone(),
+                target: component.target.clone(),
+                metadata: json!({
+                    "component_id": component.id.clone(),
+                }),
+            };
+            let target_value = request.pointer(&component.target.request_json_pointer);
+            let confidence = mapping_confidence(component, target_value);
+            let mapping = PromptAssemblyMapping {
+                component_id: component.id.clone(),
+                step_ids: vec![step.id.clone()],
+                target: component.target.clone(),
+                text_range: text_range_for_mapping(target_value, &confidence),
+                confidence,
+                preview: component.preview.clone(),
+            };
+            (step, mapping)
+        })
+        .unzip()
+}
+
+fn mapping_confidence(
+    component: &PromptComponent,
+    target_value: Option<&Value>,
+) -> PromptMappingConfidence {
+    if component
+        .metadata
+        .get("classified")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return PromptMappingConfidence::ClassifiedFallback;
+    }
+
+    let Some(target_value) = target_value else {
+        return PromptMappingConfidence::Derived;
+    };
+
+    if let Some(text) = target_value.as_str()
+        && content_hash(text) == component.content_hash
+    {
+        if component.source == "model_info" {
+            return PromptMappingConfidence::Derived;
+        }
+        return PromptMappingConfidence::ExactRange;
+    }
+
+    if content_hash(&value_to_compact_string(target_value)) == component.content_hash {
+        return PromptMappingConfidence::ExactValue;
+    }
+
+    PromptMappingConfidence::Derived
+}
+
+fn text_range_for_mapping(
+    target_value: Option<&Value>,
+    confidence: &PromptMappingConfidence,
+) -> Option<PromptTextRange> {
+    match confidence {
+        PromptMappingConfidence::ExactRange
+        | PromptMappingConfidence::Derived
+        | PromptMappingConfidence::ClassifiedFallback => {
+            let text = target_value.and_then(Value::as_str)?;
+            Some(PromptTextRange {
+                start_byte: 0,
+                end_byte: text.len(),
+                start_char: 0,
+                end_char: text.chars().count(),
+            })
+        }
+        PromptMappingConfidence::ExactValue => None,
+    }
+}
+
+fn context_window_text_range(range: &PromptTextRange) -> ContextWindowTextRange {
+    ContextWindowTextRange {
+        start_byte: range.start_byte,
+        end_byte: range.end_byte,
+        start_char: range.start_char,
+        end_char: range.end_char,
+    }
+}
+
+fn context_window_mapping_confidence(
+    confidence: &PromptMappingConfidence,
+) -> ContextWindowMappingConfidence {
+    match confidence {
+        PromptMappingConfidence::ExactRange => ContextWindowMappingConfidence::ExactRange,
+        PromptMappingConfidence::ExactValue => ContextWindowMappingConfidence::ExactValue,
+        PromptMappingConfidence::Derived => ContextWindowMappingConfidence::Derived,
+        PromptMappingConfidence::ClassifiedFallback => {
+            ContextWindowMappingConfidence::ClassifiedFallback
+        }
+    }
+}
+
 fn untraced_scaffold_components(
     request: &Value,
     seen_targets: &HashSet<String>,
@@ -255,7 +391,10 @@ fn untraced_scaffold_components(
                 input_index: None,
                 content_index: None,
                 tool_name: None,
+                text_range: None,
             },
+            mapping_confidence: None,
+            assembly_step_ids: Vec::new(),
             estimated_tokens,
             estimated_bytes,
             content_hash: content_hash(&value_to_compact_string(&value)),
@@ -701,6 +840,28 @@ mod tests {
             build_prompt_assembly_trace(&request, &prompt, &model_info, "turn-1", "responses_http");
         let breakdown =
             build_context_window_breakdown(&request, &trace, Some(128_000), Some(1_000));
+        let base_mapping = trace
+            .mappings
+            .iter()
+            .find(|mapping| mapping.target.request_json_pointer == "/instructions")
+            .expect("base instructions mapping");
+        assert_eq!(base_mapping.confidence, PromptMappingConfidence::ExactRange);
+        assert_eq!(
+            base_mapping.text_range,
+            Some(PromptTextRange {
+                start_byte: 0,
+                end_byte: "base instructions".len(),
+                start_char: 0,
+                end_char: "base instructions".chars().count(),
+            })
+        );
+        let tool_mapping = trace
+            .mappings
+            .iter()
+            .find(|mapping| mapping.target.request_json_pointer == "/tools/0")
+            .expect("tool mapping");
+        assert_eq!(tool_mapping.confidence, PromptMappingConfidence::ExactValue);
+        assert_eq!(tool_mapping.text_range, None);
 
         assert_eq!(breakdown.model_context_window, Some(128_000));
         assert_eq!(breakdown.reported_input_tokens, Some(1_000));
@@ -708,6 +869,15 @@ mod tests {
         assert!(breakdown.components.iter().any(|component| {
             component.category == ContextWindowCategory::ProjectUserContext
                 && component.target.request_json_pointer == "/input/0/content/0/text"
+                && component.target.text_range
+                    == Some(ContextWindowTextRange {
+                        start_byte: 0,
+                        end_byte: "remember this".len(),
+                        start_char: 0,
+                        end_char: "remember this".chars().count(),
+                    })
+                && component.mapping_confidence == Some(ContextWindowMappingConfidence::ExactRange)
+                && component.assembly_step_ids.len() == 1
                 && component.value == json!("remember this")
         }));
         assert!(breakdown.segments.iter().any(|segment| {
@@ -715,6 +885,92 @@ mod tests {
                 && segment.estimated_tokens > 0
                 && segment.percent_of_reported_input.is_some()
         }));
+    }
+
+    #[test]
+    fn classifies_unregistered_input_mapping_as_fallback() {
+        let prompt = Prompt {
+            base_instructions: codex_protocol::models::BaseInstructions {
+                text: "base".to_string(),
+            },
+            ..Prompt::default()
+        };
+        let model_info = serde_json::from_value(json!({
+            "slug": "gpt-test",
+            "display_name": "gpt-test",
+            "description": "desc",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [
+                {"effort": "medium", "description": "medium"}
+            ],
+            "shell_type": "shell_command",
+            "visibility": "list",
+            "supported_in_api": true,
+            "priority": 1,
+            "upgrade": null,
+            "base_instructions": "base",
+            "model_messages": null,
+            "supports_reasoning_summaries": false,
+            "support_verbosity": false,
+            "default_verbosity": null,
+            "apply_patch_tool_type": null,
+            "truncation_policy": {"mode": "bytes", "limit": 10000},
+            "supports_parallel_tool_calls": false,
+            "supports_image_detail_original": false,
+            "context_window": 128000,
+            "auto_compact_token_limit": null,
+            "experimental_supported_tools": []
+        }))
+        .expect("deserialize test model info");
+        let request = json!({
+            "model": "gpt-test",
+            "instructions": "base",
+            "input": [{
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "hello from history"
+                }]
+            }]
+        });
+
+        let trace =
+            build_prompt_assembly_trace(&request, &prompt, &model_info, "turn-1", "responses_http");
+        let mapping = trace
+            .mappings
+            .iter()
+            .find(|mapping| mapping.target.request_json_pointer == "/input/0/content/0/text")
+            .expect("fallback mapping");
+
+        assert_eq!(
+            mapping.confidence,
+            PromptMappingConfidence::ClassifiedFallback
+        );
+        assert_eq!(
+            mapping.text_range,
+            Some(PromptTextRange {
+                start_byte: 0,
+                end_byte: "hello from history".len(),
+                start_char: 0,
+                end_char: "hello from history".chars().count(),
+            })
+        );
+    }
+
+    #[test]
+    fn prompt_assembly_trace_deserializes_without_mapping_fields() {
+        let trace: PromptAssemblyTrace = serde_json::from_value(json!({
+            "inference_call_id": "inference-1",
+            "codex_turn_id": "turn-1",
+            "model_info": {"slug": "gpt-test"},
+            "base_instructions": "base",
+            "components": [],
+            "final_request_payload_id": "raw_payload:1"
+        }))
+        .expect("legacy prompt assembly trace should deserialize");
+
+        assert_eq!(trace.assembly_steps, Vec::<PromptAssemblyStep>::new());
+        assert_eq!(trace.mappings, Vec::<PromptAssemblyMapping>::new());
     }
 
     #[test]
@@ -733,6 +989,8 @@ mod tests {
                 preview: String::new(),
                 metadata: json!({}),
             }],
+            assembly_steps: Vec::new(),
+            mappings: Vec::new(),
             final_request_payload_id: "raw_payload:1".to_string(),
         };
 

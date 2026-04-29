@@ -636,6 +636,7 @@ function renderRequest() {
     $("inputList").innerHTML = "";
     $("toolList").innerHTML = "";
     $("componentGraph").innerHTML = "";
+    $("assemblyMap").innerHTML = "";
     return;
   }
   const inference = inferenceRecord(record);
@@ -648,6 +649,7 @@ function renderRequest() {
   renderInput(request?.input || []);
   renderTools(request?.tools || []);
   renderComponents();
+  renderAssemblyMappings();
 }
 
 function renderInput(input) {
@@ -706,6 +708,7 @@ function renderComponents() {
       const source = component.source || "unknown";
       const label = component.label || component.id;
       const target = component.target ? renderTarget(component.target) : "";
+      const confidence = component.mappingConfidence ? confidenceLabel(component.mappingConfidence) : "legacy";
       return `
         <button class="component${selected}" data-component="${escapeHtml(component.id)}">
           <div class="timeline-row">
@@ -718,6 +721,7 @@ function renderComponents() {
           <div class="component-stats">
             <span>${escapeHtml(formatTokens(component.estimatedTokens))} est</span>
             <span>${escapeHtml(String(component.estimatedBytes))} bytes</span>
+            <span>${escapeHtml(confidence)}</span>
             <span>${escapeHtml(component.content_hash || "")}</span>
           </div>
         </button>`;
@@ -746,18 +750,154 @@ function renderComponents() {
   });
 }
 
+function renderAssemblyMappings() {
+  const container = $("assemblyMap");
+  const assembly = state.assemblyPayload?.payload || state.assemblyPayload || {};
+  const mappings = Array.isArray(assembly.mappings) ? assembly.mappings : [];
+  const steps = Array.isArray(assembly.assembly_steps) ? assembly.assembly_steps : [];
+  const breakdown = buildContextBreakdown();
+  const components = breakdown.components;
+  const componentById = new Map(components.map((component) => [component.id, component]));
+  const stepById = new Map(steps.map((step) => [step.id, step]));
+
+  if (mappings.length === 0) {
+    if (components.length === 0) {
+      container.innerHTML = `<p class="empty">No prompt assembly trace recorded.</p>`;
+      return;
+    }
+    container.innerHTML = `
+      <p class="empty">Legacy prompt trace: no assembly mappings were recorded, so this view falls back to component targets.</p>
+      <div class="mapping-grid">
+        ${components.map((component) => renderLegacyMappingCard(component)).join("")}
+      </div>`;
+    attachAssemblyClickHandlers(componentById);
+    return;
+  }
+
+  const targetGroups = groupMappingsByTarget(mappings);
+  const targetCards = [...targetGroups.entries()]
+    .map(([targetKey, targetMappings]) => {
+      const first = targetMappings[0];
+      const target = renderTarget(first.target || {});
+      return `
+        <button class="mapping-target" data-component="${escapeHtml(first.component_id)}">
+          <strong>${escapeHtml(target || targetKey)}</strong>
+          <span>${escapeHtml(String(targetMappings.length))} source${targetMappings.length === 1 ? "" : "s"}</span>
+        </button>`;
+    })
+    .join("");
+  const cards = mappings
+    .map((mapping) => renderMappingCard(mapping, componentById.get(mapping.component_id), stepById))
+    .join("");
+
+  container.innerHTML = `
+    <section class="mapping-section">
+      <div class="context-summary">
+        <strong>Request targets</strong>
+        <span>${escapeHtml(String(targetGroups.size))} mapped final request locations</span>
+      </div>
+      <div class="mapping-target-grid">${targetCards}</div>
+    </section>
+    <section class="mapping-section">
+      <div class="context-summary">
+        <strong>Assembly mappings</strong>
+        <span>${escapeHtml(String(mappings.length))} component mappings</span>
+      </div>
+      <div class="mapping-grid">${cards}</div>
+    </section>`;
+  attachAssemblyClickHandlers(componentById);
+}
+
+function renderLegacyMappingCard(component) {
+  return `
+    <button class="mapping-card" data-component="${escapeHtml(component.id)}">
+      <div class="timeline-row">
+        <span class="kind">${escapeHtml(component.source || "unknown")}</span>
+        <span class="muted">legacy target</span>
+      </div>
+      <strong>${escapeHtml(component.label || component.id)}</strong>
+      <code>${escapeHtml(renderTarget(component.target || {}))}</code>
+      <p>${escapeHtml(component.preview || "")}</p>
+    </button>`;
+}
+
+function renderMappingCard(mapping, component, stepById) {
+  const steps = (mapping.step_ids || [])
+    .map((stepId) => stepById.get(stepId))
+    .filter(Boolean);
+  const stepPath = steps.length > 0
+    ? steps.map((step) => `${step.id} ${step.label || step.source || ""}`.trim()).join(" -> ")
+    : (mapping.step_ids || []).join(" -> ");
+  const confidence = confidenceLabel(mapping.confidence);
+  const target = renderTarget(mapping.target || {});
+  return `
+    <button class="mapping-card" data-component="${escapeHtml(mapping.component_id)}">
+      <div class="timeline-row">
+        <span class="kind">${escapeHtml(component?.source || "unknown")}</span>
+        <span class="confidence ${escapeHtml(mapping.confidence || "unknown")}">${escapeHtml(confidence)}</span>
+      </div>
+      <strong>${escapeHtml(component?.label || mapping.component_id)}</strong>
+      <code>${escapeHtml(target)}</code>
+      <div class="mapping-path">${escapeHtml(stepPath || "assembly step unavailable")}</div>
+      <p>${escapeHtml(mapping.preview || component?.preview || "")}</p>
+    </button>`;
+}
+
+function attachAssemblyClickHandlers(componentById) {
+  $("assemblyMap").querySelectorAll("[data-component]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const component = componentById.get(button.dataset.component);
+      if (!component) {
+        return;
+      }
+      state.selectedComponent = component;
+      renderComponents();
+      renderInspector();
+    });
+  });
+}
+
+function groupMappingsByTarget(mappings) {
+  const groups = new Map();
+  mappings.forEach((mapping) => {
+    const key = renderTarget(mapping.target || {}) || mapping.component_id;
+    const group = groups.get(key) || [];
+    group.push(mapping);
+    groups.set(key, group);
+  });
+  return groups;
+}
+
 function buildContextBreakdown() {
-  const rawComponents = state.assemblyPayload?.payload?.components || state.assemblyPayload?.components || [];
+  const assembly = state.assemblyPayload?.payload || state.assemblyPayload || {};
+  const rawComponents = assembly.components || [];
+  const mappingsByComponent = new Map();
+  const rawMappings = Array.isArray(assembly.mappings) ? assembly.mappings : [];
+  rawMappings.forEach((mapping) => {
+    const id = mapping.component_id;
+    if (!id) {
+      return;
+    }
+    const queue = mappingsByComponent.get(id) || [];
+    queue.push(mapping);
+    mappingsByComponent.set(id, queue);
+  });
   const request = state.requestPayload?.payload || state.requestPayload || {};
   const components = Array.isArray(rawComponents)
     ? rawComponents.map((component) => {
-        const pointer = component.target?.request_json_pointer || "";
+        const mapping = mappingsByComponent.get(component.id)?.shift() || null;
+        const target = mapping?.target || component.target || {};
+        const pointer = target.request_json_pointer || "";
         const value = jsonPointerGet(request, pointer);
         const exists = value !== undefined;
         const fragment = exists ? value : null;
         const estimatedBytes = estimateValueBytes(fragment, exists);
         return {
           ...component,
+          target,
+          mapping,
+          mappingConfidence: mapping?.confidence || null,
+          assemblyStepIds: mapping?.step_ids || [],
           category: contextCategory(component, fragment),
           value: fragment,
           estimatedBytes,
@@ -949,7 +1089,19 @@ function renderTarget(target) {
   if (target.tool_name) {
     parts.push(`tool:${target.tool_name}`);
   }
+  const range = target.text_range;
+  if (range) {
+    parts.push(`bytes ${range.start_byte}..${range.end_byte}`);
+    parts.push(`chars ${range.start_char}..${range.end_char}`);
+  }
   return parts.join(" / ");
+}
+
+function confidenceLabel(value) {
+  if (!value) {
+    return "unknown";
+  }
+  return String(value).replaceAll("_", " ");
 }
 
 function renderInspector() {
@@ -964,6 +1116,8 @@ function renderInspector() {
         source: state.selectedComponent.source,
         label: state.selectedComponent.label,
         target,
+        confidence: confidenceLabel(state.selectedComponent.mappingConfidence),
+        assemblySteps: (state.selectedComponent.assemblyStepIds || []).join(" -> "),
         hash: state.selectedComponent.content_hash,
         estimatedTokens: state.selectedComponent.estimatedTokens,
         estimatedBytes: state.selectedComponent.estimatedBytes,

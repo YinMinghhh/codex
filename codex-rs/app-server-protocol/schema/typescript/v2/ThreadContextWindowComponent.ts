@@ -4,4 +4,4 @@
 import type { ThreadContextWindowCategory } from "./ThreadContextWindowCategory";
 import type { ThreadContextWindowTarget } from "./ThreadContextWindowTarget";
 
-export type ThreadContextWindowComponent = { id: string, category: ThreadContextWindowCategory, source: string, label: string, target: ThreadContextWindowTarget, estimatedTokens: number, estimatedBytes: number, contentHash: string, value: unknown, };
+export type ThreadContextWindowComponent = { id: string, category: ThreadContextWindowCategory, source: string, label: string, target: ThreadContextWindowTarget, mappingConfidence: ThreadContextWindowMappingConfidence | null, assemblyStepIds: Array<string>, estimatedTokens: number, estimatedBytes: number, contentHash: string, value: unknown, };

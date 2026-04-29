@@ -3,7 +3,9 @@ use crate::status::format_tokens_compact;
 use codex_protocol::protocol::ContextWindowBreakdown;
 use codex_protocol::protocol::ContextWindowCategory;
 use codex_protocol::protocol::ContextWindowComponent;
+use codex_protocol::protocol::ContextWindowMappingConfidence;
 use codex_protocol::protocol::ContextWindowSegment;
+use codex_protocol::protocol::ContextWindowTextRange;
 use codex_protocol::protocol::TokenUsageInfo;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
@@ -124,6 +126,7 @@ fn segment_line(segment: &ContextWindowSegment) -> Line<'static> {
 
 fn component_lines(component: &ContextWindowComponent, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+    let target = format_target(component);
     lines.push(
         vec![
             "  ".into(),
@@ -131,7 +134,7 @@ fn component_lines(component: &ContextWindowComponent, width: u16) -> Vec<Line<'
             " ".into(),
             component.label.clone().bold(),
             "  ".dim(),
-            component.target.request_json_pointer.clone().cyan(),
+            target.cyan(),
         ]
         .into(),
     );
@@ -151,10 +154,59 @@ fn component_lines(component: &ContextWindowComponent, width: u16) -> Vec<Line<'
         ]
         .into(),
     );
+    let mut assembly = Vec::new();
+    if let Some(confidence) = component.mapping_confidence {
+        assembly.push(format!(
+            "confidence {}",
+            mapping_confidence_label(confidence)
+        ));
+    }
+    if !component.assembly_step_ids.is_empty() {
+        assembly.push(format!(
+            "steps {}",
+            component.assembly_step_ids.join(" -> ")
+        ));
+    }
+    if !assembly.is_empty() {
+        lines.push(vec!["    assembly ".dim(), assembly.join("  ").into()].into());
+    }
     let value = serde_json::to_string_pretty(&component.value)
         .unwrap_or_else(|err| format!("failed to render request fragment: {err}"));
     lines.extend(wrap_prefixed(&value, "    value ", "          ", width));
     lines
+}
+
+fn format_target(component: &ContextWindowComponent) -> String {
+    let mut parts = vec![component.target.request_json_pointer.clone()];
+    if let Some(input_index) = component.target.input_index {
+        parts.push(format!("input[{input_index}]"));
+    }
+    if let Some(content_index) = component.target.content_index {
+        parts.push(format!("content[{content_index}]"));
+    }
+    if let Some(tool_name) = &component.target.tool_name {
+        parts.push(format!("tool:{tool_name}"));
+    }
+    if let Some(range) = &component.target.text_range {
+        parts.push(format_text_range(range));
+    }
+    parts.join(" / ")
+}
+
+fn format_text_range(range: &ContextWindowTextRange) -> String {
+    format!(
+        "bytes {}..{} chars {}..{}",
+        range.start_byte, range.end_byte, range.start_char, range.end_char
+    )
+}
+
+fn mapping_confidence_label(confidence: ContextWindowMappingConfidence) -> &'static str {
+    match confidence {
+        ContextWindowMappingConfidence::ExactRange => "exact_range",
+        ContextWindowMappingConfidence::ExactValue => "exact_value",
+        ContextWindowMappingConfidence::Derived => "derived",
+        ContextWindowMappingConfidence::ClassifiedFallback => "classified_fallback",
+    }
 }
 
 fn wrap_prefixed(
@@ -253,7 +305,9 @@ fn percent(value: i64, total: i64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::ContextWindowMappingConfidence;
     use codex_protocol::protocol::ContextWindowTarget;
+    use codex_protocol::protocol::ContextWindowTextRange;
     use codex_protocol::protocol::TokenUsage;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -308,7 +362,10 @@ mod tests {
                     input_index: None,
                     content_index: None,
                     tool_name: Some("shell".to_string()),
+                    text_range: None,
                 },
+                mapping_confidence: Some(ContextWindowMappingConfidence::ExactValue),
+                assembly_step_ids: vec!["step:2".to_string()],
                 estimated_tokens: 12,
                 estimated_bytes: 48,
                 content_hash: "fnv1a64:0000000000000000".to_string(),
@@ -332,6 +389,69 @@ mod tests {
                 .any(|line| line.contains("Tool schemas  12 est / 48 bytes (24.0%)"))
         );
         assert!(lines.iter().any(|line| line.contains("/tools/0")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("confidence exact_value  steps step:2"))
+        );
         assert!(lines.iter().any(|line| line.contains("\"description\"")));
+        insta::assert_snapshot!(
+            lines.join("\n"),
+            @r###"
+/context context window
+Local debug data: final request fragments can contain prompts, paths, tool output, API responses, and secrets.
+Server input: 50  Estimated components: 12  Window: 100
+Headroom: 50  Used: 50.0%
+Usage ###############-------------------------------------------------
+
+Segments
+  T Tool schemas  12 est / 48 bytes (24.0%)
+
+Components
+  T shell  /tools/0 / tool:shell
+    source built_tools  hash fnv1a64:0000000000000000  est 12 / 48 bytes
+    assembly confidence exact_value  steps step:2
+    value {
+            "name": "shell",
+            "description": "run commands"
+          }
+"###
+        );
+    }
+
+    #[test]
+    fn renders_target_text_range() {
+        let component = ContextWindowComponent {
+            id: "memory:1".to_string(),
+            category: ContextWindowCategory::ProjectUserContext,
+            source: "memory".to_string(),
+            label: "memory instructions".to_string(),
+            target: ContextWindowTarget {
+                request_json_pointer: "/input/0/content/0/text".to_string(),
+                input_index: Some(0),
+                content_index: Some(0),
+                tool_name: None,
+                text_range: Some(ContextWindowTextRange {
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_char: 0,
+                    end_char: 6,
+                }),
+            },
+            mapping_confidence: Some(ContextWindowMappingConfidence::ExactRange),
+            assembly_step_ids: vec!["step:1".to_string()],
+            estimated_tokens: 2,
+            estimated_bytes: 10,
+            content_hash: "fnv1a64:1111111111111111".to_string(),
+            value: json!("\u{8bb0}\u{4f4f} abc"),
+        };
+
+        let lines = lines_to_text(component_lines(&component, 100));
+
+        assert!(lines.iter().any(|line| {
+            line.contains(
+                "/input/0/content/0/text / input[0] / content[0] / bytes 0..10 chars 0..6",
+            )
+        }));
     }
 }

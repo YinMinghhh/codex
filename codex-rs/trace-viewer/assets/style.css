@@ -139,6 +139,21 @@ h3 {
   gap: 8px;
 }
 
+.mapping-section {
+  display: grid;
+  gap: 8px;
+}
+
+.mapping-grid,
+.mapping-target-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.mapping-target-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
 .context-summary {
   display: flex;
   justify-content: space-between;
@@ -239,7 +254,9 @@ h3 {
 .bundle,
 .timeline-item,
 .card,
-.component {
+.component,
+.mapping-card,
+.mapping-target {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel);
@@ -248,7 +265,9 @@ h3 {
 
 .bundle,
 .timeline-item,
-.component {
+.component,
+.mapping-card,
+.mapping-target {
   text-align: left;
 }
 
@@ -293,9 +312,40 @@ h3 {
 .bundle.selected,
 .timeline-item.active,
 .component.selected,
-.component.active {
+.component.active,
+.mapping-card:hover,
+.mapping-target:hover {
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.mapping-card {
+  display: grid;
+  gap: 6px;
+}
+
+.mapping-card code,
+.mapping-path {
+  overflow-wrap: anywhere;
+}
+
+.mapping-path {
+  color: var(--muted);
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+}
+
+.mapping-target {
+  display: grid;
+  gap: 4px;
+}
+
+.confidence {
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--accent);
+  font-size: 11px;
 }
 
 .bundle-title,
