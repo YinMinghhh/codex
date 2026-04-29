@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Component;
@@ -57,6 +58,7 @@ pub async fn serve(config: TraceViewerConfig) -> Result<()> {
         .route("/", get(index))
         .route("/app.js", get(app_js))
         .route("/style.css", get(style_css))
+        .route("/api/sessions", get(list_sessions))
         .route("/api/bundles", get(list_bundles))
         .route("/api/bundles/{bundle_id}/state", get(bundle_state))
         .route(
@@ -107,6 +109,12 @@ async fn list_bundles(
     State(state): State<Arc<ViewerState>>,
 ) -> Result<Json<Vec<BundleSummary>>, HttpError> {
     Ok(Json(state.list_bundles()?))
+}
+
+async fn list_sessions(
+    State(state): State<Arc<ViewerState>>,
+) -> Result<Json<Vec<SessionSummary>>, HttpError> {
+    Ok(Json(state.list_sessions()?))
 }
 
 async fn bundle_state(
@@ -241,7 +249,7 @@ impl ViewerState {
                         continue;
                     }
                     let id = entry.file_name().to_string_lossy().into_owned();
-                    if let Ok(summary) = summarize_bundle(id, &path) {
+                    if let Ok(Some(summary)) = summarize_displayable_bundle(id, &path) {
                         bundles.push(summary);
                     }
                 }
@@ -254,6 +262,36 @@ impl ViewerState {
                 Ok(bundles)
             }
         }
+    }
+
+    fn list_sessions(&self) -> Result<Vec<SessionSummary>> {
+        let mut grouped = BTreeMap::<String, Vec<BundleSummary>>::new();
+        for bundle in self.list_bundles()? {
+            let session_id = bundle
+                .root_thread_id
+                .clone()
+                .unwrap_or_else(|| format!("bundle:{}", bundle.id));
+            grouped.entry(session_id).or_default().push(bundle);
+        }
+
+        let mut sessions = grouped
+            .into_iter()
+            .map(|(id, mut bundles)| {
+                bundles.sort_by(|left, right| {
+                    left.started_at_unix_ms
+                        .cmp(&right.started_at_unix_ms)
+                        .then_with(|| left.id.cmp(&right.id))
+                });
+                session_summary_from_bundles(id, bundles)
+            })
+            .collect::<Vec<_>>();
+        sessions.sort_by(|left, right| {
+            right
+                .latest_started_at_unix_ms
+                .cmp(&left.latest_started_at_unix_ms)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(sessions)
     }
 
     fn bundle_path(&self, bundle_id: &str) -> Result<PathBuf, HttpError> {
@@ -294,7 +332,62 @@ struct BundleSummary {
     status: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct SessionSummary {
+    id: String,
+    display_name: String,
+    subtitle: String,
+    root_thread_id: Option<String>,
+    started_at_unix_ms: i64,
+    latest_started_at_unix_ms: i64,
+    bundle_count: usize,
+    bundles: Vec<BundleSummary>,
+}
+
+#[derive(Debug)]
+struct BundleManifestMetadata {
+    trace_id: Option<String>,
+    rollout_id: Option<String>,
+    root_thread_id: Option<String>,
+    started_at_unix_ms: i64,
+}
+
 fn summarize_bundle(id: String, bundle_path: &Path) -> Result<BundleSummary> {
+    let metadata = read_bundle_manifest_metadata(bundle_path)?;
+    let reduced = replay_bundle(bundle_path);
+    let reduced_status = reduced
+        .as_ref()
+        .map(|trace| format!("{:?}", trace.status).to_lowercase())
+        .unwrap_or_else(|err| format!("partial: {err}"));
+    Ok(bundle_summary_from_parts(
+        id,
+        bundle_path,
+        metadata,
+        reduced.as_ref().ok(),
+        reduced_status,
+    ))
+}
+
+fn summarize_displayable_bundle(id: String, bundle_path: &Path) -> Result<Option<BundleSummary>> {
+    let metadata = read_bundle_manifest_metadata(bundle_path)?;
+    let reduced = match replay_bundle(bundle_path) {
+        Ok(reduced) => reduced,
+        Err(_) => return Ok(None),
+    };
+    if !is_displayable_bundle(&reduced) {
+        return Ok(None);
+    }
+    let reduced_status = format!("{:?}", reduced.status).to_lowercase();
+    Ok(Some(bundle_summary_from_parts(
+        id,
+        bundle_path,
+        metadata,
+        Some(&reduced),
+        reduced_status,
+    )))
+}
+
+fn read_bundle_manifest_metadata(bundle_path: &Path) -> Result<BundleManifestMetadata> {
     let manifest_path = bundle_path.join(MANIFEST_FILE_NAME);
     let manifest: Value = serde_json::from_slice(
         &std::fs::read(&manifest_path)
@@ -316,37 +409,88 @@ fn summarize_bundle(id: String, bundle_path: &Path) -> Result<BundleSummary> {
         .get("started_at_unix_ms")
         .and_then(Value::as_i64)
         .unwrap_or_default();
-    let reduced = replay_bundle(bundle_path);
-    let reduced_status = reduced
-        .as_ref()
-        .map(|trace| format!("{:?}", trace.status).to_lowercase())
-        .unwrap_or_else(|err| format!("partial: {err}"));
-    let (display_name, subtitle) = reduced
-        .as_ref()
-        .ok()
-        .map(bundle_labels_from_trace)
-        .unwrap_or_else(|| {
-            let fallback_id = trace_id.as_deref().unwrap_or(&id);
-            (
-                format!("Trace {}", short_identifier(fallback_id)),
-                root_thread_id
-                    .as_deref()
-                    .map(|thread_id| format!("thread {}", short_identifier(thread_id)))
-                    .unwrap_or_else(|| "trace bundle".to_string()),
-            )
-        });
-    Ok(BundleSummary {
+    Ok(BundleManifestMetadata {
+        trace_id,
+        rollout_id,
+        root_thread_id,
+        started_at_unix_ms,
+    })
+}
+
+fn bundle_summary_from_parts(
+    id: String,
+    bundle_path: &Path,
+    metadata: BundleManifestMetadata,
+    reduced: Option<&RolloutTrace>,
+    status: String,
+) -> BundleSummary {
+    let (display_name, subtitle) = reduced.map(bundle_labels_from_trace).unwrap_or_else(|| {
+        let fallback_id = metadata.trace_id.as_deref().unwrap_or(&id);
+        (
+            format!("Trace {}", short_identifier(fallback_id)),
+            metadata
+                .root_thread_id
+                .as_deref()
+                .map(|thread_id| format!("thread {}", short_identifier(thread_id)))
+                .unwrap_or_else(|| "trace bundle".to_string()),
+        )
+    });
+    BundleSummary {
         short_id: short_identifier(&id),
         id,
         display_name,
         subtitle,
         path: bundle_path.display().to_string(),
-        trace_id,
-        rollout_id,
+        trace_id: metadata.trace_id,
+        rollout_id: metadata.rollout_id,
+        root_thread_id: metadata.root_thread_id,
+        started_at_unix_ms: metadata.started_at_unix_ms,
+        status,
+    }
+}
+
+fn is_displayable_bundle(trace: &RolloutTrace) -> bool {
+    !trace.codex_turns.is_empty() && !trace.inference_calls.is_empty()
+}
+
+fn session_summary_from_bundles(id: String, bundles: Vec<BundleSummary>) -> SessionSummary {
+    let first = bundles.first();
+    let last = bundles.last();
+    let root_thread_id = first.and_then(|bundle| bundle.root_thread_id.clone());
+    let display_name = first
+        .map(|bundle| bundle.display_name.clone())
+        .unwrap_or_else(|| short_identifier(&id));
+    let started_at_unix_ms = first
+        .map(|bundle| bundle.started_at_unix_ms)
+        .unwrap_or_default();
+    let latest_started_at_unix_ms = last
+        .map(|bundle| bundle.started_at_unix_ms)
+        .unwrap_or_default();
+    let trace_label = if bundles.len() == 1 {
+        "trace"
+    } else {
+        "traces"
+    };
+    let subtitle = root_thread_id
+        .as_deref()
+        .map(|thread_id| {
+            format!(
+                "{} {trace_label} / thread {}",
+                bundles.len(),
+                short_identifier(thread_id)
+            )
+        })
+        .unwrap_or_else(|| format!("{} {trace_label}", bundles.len()));
+    SessionSummary {
+        id,
+        display_name,
+        subtitle,
         root_thread_id,
         started_at_unix_ms,
-        status: reduced_status,
-    })
+        latest_started_at_unix_ms,
+        bundle_count: bundles.len(),
+        bundles,
+    }
 }
 
 fn bundle_labels_from_trace(trace: &RolloutTrace) -> (String, String) {
@@ -552,6 +696,10 @@ impl IntoResponse for HttpError {
 
 #[cfg(test)]
 mod tests {
+    use codex_rollout_trace::RawPayloadKind;
+    use codex_rollout_trace::RawTraceEventPayload;
+    use codex_rollout_trace::TraceWriter;
+    use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
@@ -573,5 +721,188 @@ mod tests {
         let result = reduce_bundle_to_path(temp.path(), &output);
         assert!(result.is_err());
         Ok(())
+    }
+
+    #[test]
+    fn root_listing_hides_thread_start_only_bundle() -> Result<()> {
+        let root = TempDir::new()?;
+        create_thread_start_only_bundle(&root, "startup-fragment")?;
+        create_running_inference_bundle(&root, "actionable")?;
+
+        let state = ViewerState::new(Some(root.path().to_path_buf()), None)?;
+
+        assert_eq!(bundle_ids(state.list_bundles()?), vec!["actionable"]);
+        Ok(())
+    }
+
+    #[test]
+    fn root_listing_hides_replay_error_bundle() -> Result<()> {
+        let root = TempDir::new()?;
+        create_unknown_turn_inference_bundle(&root, "partial")?;
+        create_running_inference_bundle(&root, "actionable")?;
+
+        let state = ViewerState::new(Some(root.path().to_path_buf()), None)?;
+
+        assert_eq!(bundle_ids(state.list_bundles()?), vec!["actionable"]);
+        Ok(())
+    }
+
+    #[test]
+    fn root_listing_keeps_running_bundle_with_turn_and_inference() -> Result<()> {
+        let root = TempDir::new()?;
+        create_running_inference_bundle(&root, "actionable")?;
+
+        let state = ViewerState::new(Some(root.path().to_path_buf()), None)?;
+
+        let bundles = state.list_bundles()?;
+        assert_eq!(bundle_ids(bundles.clone()), vec!["actionable"]);
+        assert_eq!(bundles[0].status, "running");
+        Ok(())
+    }
+
+    #[test]
+    fn root_session_listing_groups_traces_by_thread_with_oldest_trace_first() -> Result<()> {
+        let root = TempDir::new()?;
+        create_running_inference_bundle_for_thread(
+            &root,
+            "trace-newer",
+            "thread-shared",
+            "turn-newer",
+            "newer turn",
+        )?;
+        set_bundle_started_at(&root, "trace-newer", 300)?;
+        create_running_inference_bundle_for_thread(
+            &root,
+            "trace-older",
+            "thread-shared",
+            "turn-older",
+            "older turn",
+        )?;
+        set_bundle_started_at(&root, "trace-older", 100)?;
+        create_running_inference_bundle_for_thread(
+            &root,
+            "trace-other",
+            "thread-other",
+            "turn-other",
+            "other turn",
+        )?;
+        set_bundle_started_at(&root, "trace-other", 200)?;
+
+        let state = ViewerState::new(Some(root.path().to_path_buf()), None)?;
+
+        let sessions = state.list_sessions()?;
+        let shared = sessions
+            .iter()
+            .find(|session| session.root_thread_id.as_deref() == Some("thread-shared"))
+            .expect("shared session should be listed");
+        assert_eq!(
+            bundle_ids(shared.bundles.clone()),
+            vec!["trace-older", "trace-newer"]
+        );
+        Ok(())
+    }
+
+    fn create_thread_start_only_bundle(root: &TempDir, id: &str) -> Result<()> {
+        let writer = TraceWriter::create(
+            root.path().join(id),
+            format!("trace-{id}"),
+            format!("rollout-{id}"),
+            "thread-root".to_string(),
+        )?;
+        writer.append(RawTraceEventPayload::ThreadStarted {
+            thread_id: "thread-root".to_string(),
+            agent_path: "/root".to_string(),
+            metadata_payload: None,
+        })?;
+        Ok(())
+    }
+
+    fn create_unknown_turn_inference_bundle(root: &TempDir, id: &str) -> Result<()> {
+        let writer = TraceWriter::create(
+            root.path().join(id),
+            format!("trace-{id}"),
+            format!("rollout-{id}"),
+            "thread-root".to_string(),
+        )?;
+        writer.append(RawTraceEventPayload::ThreadStarted {
+            thread_id: "thread-root".to_string(),
+            agent_path: "/root".to_string(),
+            metadata_payload: None,
+        })?;
+        let request_payload = writer.write_json_payload(
+            RawPayloadKind::InferenceRequest,
+            &json!({ "input": [message("user", "hello")] }),
+        )?;
+        writer.append(RawTraceEventPayload::InferenceStarted {
+            inference_call_id: "inference-1".to_string(),
+            thread_id: "thread-root".to_string(),
+            codex_turn_id: "missing-turn".to_string(),
+            model: "gpt-test".to_string(),
+            provider_name: "test-provider".to_string(),
+            request_payload,
+        })?;
+        Ok(())
+    }
+
+    fn create_running_inference_bundle(root: &TempDir, id: &str) -> Result<()> {
+        create_running_inference_bundle_for_thread(root, id, "thread-root", "turn-1", "hello")
+    }
+
+    fn create_running_inference_bundle_for_thread(
+        root: &TempDir,
+        id: &str,
+        thread_id: &str,
+        turn_id: &str,
+        user_message: &str,
+    ) -> Result<()> {
+        let writer = TraceWriter::create(
+            root.path().join(id),
+            format!("trace-{id}"),
+            format!("rollout-{id}"),
+            thread_id.to_string(),
+        )?;
+        writer.append(RawTraceEventPayload::ThreadStarted {
+            thread_id: thread_id.to_string(),
+            agent_path: "/root".to_string(),
+            metadata_payload: None,
+        })?;
+        writer.append(RawTraceEventPayload::CodexTurnStarted {
+            codex_turn_id: turn_id.to_string(),
+            thread_id: thread_id.to_string(),
+        })?;
+        let request_payload = writer.write_json_payload(
+            RawPayloadKind::InferenceRequest,
+            &json!({ "input": [message("user", user_message)] }),
+        )?;
+        writer.append(RawTraceEventPayload::InferenceStarted {
+            inference_call_id: "inference-1".to_string(),
+            thread_id: thread_id.to_string(),
+            codex_turn_id: turn_id.to_string(),
+            model: "gpt-test".to_string(),
+            provider_name: "test-provider".to_string(),
+            request_payload,
+        })?;
+        Ok(())
+    }
+
+    fn set_bundle_started_at(root: &TempDir, id: &str, started_at_unix_ms: i64) -> Result<()> {
+        let manifest_path = root.path().join(id).join(MANIFEST_FILE_NAME);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path)?)?;
+        manifest["started_at_unix_ms"] = started_at_unix_ms.into();
+        std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+        Ok(())
+    }
+
+    fn message(role: &str, text: &str) -> serde_json::Value {
+        json!({
+            "type": "message",
+            "role": role,
+            "content": [{"type": "input_text", "text": text}]
+        })
+    }
+
+    fn bundle_ids(bundles: Vec<BundleSummary>) -> Vec<String> {
+        bundles.into_iter().map(|bundle| bundle.id).collect()
     }
 }
