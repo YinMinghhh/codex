@@ -1,13 +1,18 @@
 const state = {
+  sessions: [],
   bundles: [],
+  sessionId: null,
   bundleId: null,
   trace: null,
+  traces: [],
   selectedInferenceId: null,
+  selectedInferenceKey: null,
   requestPayload: null,
   assemblyPayload: null,
   selectedComponent: null,
   selectedCategory: null,
-  stream: null,
+  streams: [],
+  selectionRevision: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -82,101 +87,186 @@ function statusTitle(status) {
 }
 
 async function loadBundles() {
-  const data = await fetchJson("/api/bundles");
-  state.bundles = Array.isArray(data) ? data : data.bundles || [];
-  if (!state.bundleId && state.bundles.length > 0) {
-    state.bundleId = state.bundles[0].id;
+  const data = await fetchJson("/api/sessions");
+  state.sessions = Array.isArray(data) ? data : data.sessions || [];
+  state.bundles = state.sessions.flatMap((session) => session.bundles || []);
+  if (state.sessionId && !state.sessions.some((session) => session.id === state.sessionId)) {
+    state.sessionId = null;
+    state.bundleId = null;
+  }
+  if (!state.sessionId && state.sessions.length > 0) {
+    state.sessionId = state.sessions[0].id;
   }
   renderBundles();
-  if (state.bundleId) {
-    await selectBundle(state.bundleId);
+  if (state.sessionId) {
+    await selectSession(state.sessionId);
   }
 }
 
 function renderBundles() {
   const list = $("bundleList");
-  if (state.bundles.length === 0) {
-    list.innerHTML = `<p class="empty">No trace bundles found.</p>`;
+  if (state.sessions.length === 0) {
+    list.innerHTML = `<p class="empty">No trace sessions found.</p>`;
     return;
   }
 
-  list.innerHTML = state.bundles
-    .map((bundle) => {
-      const selected = bundle.id === state.bundleId ? " selected" : "";
-      const displayName = bundle.display_name || `Trace ${shortId(bundle.id)}`;
-      const subtitle = bundle.subtitle || formatTime(bundle.started_at_unix_ms);
-      const short = bundle.short_id || shortId(bundle.id);
+  list.innerHTML = state.sessions
+    .map((session) => {
+      const selected = session.id === state.sessionId ? " selected" : "";
+      const displayName = session.display_name || `Session ${shortId(session.id)}`;
+      const subtitle = session.subtitle || formatTime(session.started_at_unix_ms);
+      const bundles = session.bundles || [];
       return `
-        <button class="bundle${selected}" data-bundle="${escapeHtml(bundle.id)}">
+        <section class="session-group${selected}" data-session="${escapeHtml(session.id)}">
+          <button class="session-button" data-session="${escapeHtml(session.id)}">
+            <div class="bundle-title">
+              <span class="bundle-name" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
+              <span class="status-pill" title="${escapeHtml(`${session.bundle_count || bundles.length} trace bundles`)}">${escapeHtml(`${session.bundle_count || bundles.length} traces`)}</span>
+            </div>
+            <div class="bundle-meta">
+              <span>${escapeHtml(subtitle)}</span>
+              <span class="bundle-id" title="${escapeHtml(session.id)}">${escapeHtml(shortId(session.id))}</span>
+            </div>
+          </button>
+          <div class="session-traces">
+            ${bundles.map(renderBundleTrace).join("")}
+          </div>
+        </section>`;
+    })
+    .join("");
+
+  list.querySelectorAll("button.session-button").forEach((button) => {
+    button.addEventListener("click", () => selectSession(button.dataset.session).catch(showError));
+  });
+  list.querySelectorAll("button.bundle").forEach((button) => {
+    button.addEventListener("click", () => selectBundleTrace(button.dataset.bundle).catch(showError));
+  });
+}
+
+function renderBundleTrace(bundle) {
+  const selected = bundle.id === state.bundleId ? " selected" : "";
+  const displayName = `Trace ${bundle.trace_id ? shortId(bundle.trace_id) : shortId(bundle.id)}`;
+  const subtitle = formatTime(bundle.started_at_unix_ms);
+  const short = bundle.short_id || shortId(bundle.id);
+  return `
+        <button class="bundle trace-row${selected}" data-bundle="${escapeHtml(bundle.id)}">
           <div class="bundle-title">
             <span class="bundle-name" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
             <span class="status-pill" title="${escapeHtml(statusTitle(bundle.status))}">${escapeHtml(statusLabel(bundle.status))}</span>
           </div>
           <div class="bundle-meta">
-            <span>${escapeHtml(subtitle)}</span>
+            <span title="${escapeHtml(subtitle)}">${escapeHtml(subtitle)}</span>
             <span class="bundle-id" title="${escapeHtml(bundle.id)}">${escapeHtml(short)}</span>
           </div>
         </button>`;
-    })
-    .join("");
-
-  list.querySelectorAll("button.bundle").forEach((button) => {
-    button.addEventListener("click", () => selectBundle(button.dataset.bundle));
-  });
 }
 
-async function selectBundle(bundleId) {
-  if (state.stream) {
-    state.stream.close();
-    state.stream = null;
-  }
+async function selectSession(sessionId, preferredBundleId = null) {
+  closeStreams();
 
-  state.bundleId = bundleId;
+  state.sessionId = sessionId;
+  state.bundleId = preferredBundleId;
   state.trace = null;
+  state.traces = [];
   state.selectedInferenceId = null;
+  state.selectedInferenceKey = null;
   state.requestPayload = null;
   state.assemblyPayload = null;
   state.selectedComponent = null;
   state.selectedCategory = null;
   renderBundles();
-  await loadBundleState();
-  startStream();
+  await loadSessionState(preferredBundleId);
+  startStreams();
 }
 
-async function loadBundleState() {
-  if (!state.bundleId) {
+async function selectBundleTrace(bundleId) {
+  const session = state.sessions.find((candidate) =>
+    (candidate.bundles || []).some((bundle) => bundle.id === bundleId),
+  );
+  if (!session) {
+    return;
+  }
+  if (state.sessionId !== session.id) {
+    await selectSession(session.id, bundleId);
+    return;
+  }
+  state.bundleId = bundleId;
+  const firstKey = firstInferenceKeyForBundle(bundleId);
+  if (firstKey) {
+    await selectInference(firstKey);
+  } else {
+    renderBundles();
+    renderTimeline();
+  }
+}
+
+async function loadSessionState(preferredBundleId = null) {
+  const session = selectedSession();
+  if (!session) {
     return;
   }
 
-  const data = await fetchJson(`/api/bundles/${encodeURIComponent(state.bundleId)}/state`);
-  state.trace = data.state;
+  const traces = [];
+  for (const bundle of session.bundles || []) {
+    const data = await fetchJson(`/api/bundles/${encodeURIComponent(bundle.id)}/state`);
+    traces.push({
+      bundle: data.bundle || bundle,
+      trace: data.state,
+    });
+  }
+  state.traces = traces.sort((left, right) => {
+    const leftTime = left.bundle?.started_at_unix_ms || left.trace?.started_at_unix_ms || 0;
+    const rightTime = right.bundle?.started_at_unix_ms || right.trace?.started_at_unix_ms || 0;
+    return leftTime - rightTime || String(left.bundle?.id || "").localeCompare(String(right.bundle?.id || ""));
+  });
   renderTimeline();
 
-  const calls = state.trace?.inference_calls || {};
+  const calls = inferenceEntries();
+  const preferredKey = preferredBundleId ? firstInferenceKeyForBundle(preferredBundleId) : null;
+  const currentBundleKey = state.bundleId ? firstInferenceKeyForBundle(state.bundleId) : null;
   const nextInference =
-    state.selectedInferenceId && calls[state.selectedInferenceId]
-      ? state.selectedInferenceId
-      : Object.keys(calls)[0];
+    state.selectedInferenceKey && calls.some((entry) => entry.key === state.selectedInferenceKey)
+      ? state.selectedInferenceKey
+      : preferredKey || currentBundleKey || calls[0]?.key;
   if (nextInference) {
     await selectInference(nextInference);
   } else {
+    state.trace = state.traces[0]?.trace || null;
+    state.bundleId = state.traces[0]?.bundle?.id || null;
+    renderBundles();
     renderRequest();
     renderInspector();
   }
 }
 
-function startStream() {
-  if (!state.bundleId) {
+function selectedSession() {
+  return state.sessions.find((session) => session.id === state.sessionId) || null;
+}
+
+function closeStreams() {
+  for (const stream of state.streams) {
+    stream.close();
+  }
+  state.streams = [];
+}
+
+function startStreams() {
+  const session = selectedSession();
+  if (!session) {
     return;
   }
 
-  state.stream = new EventSource(`/api/bundles/${encodeURIComponent(state.bundleId)}/stream`);
-  state.stream.onmessage = debounceRefresh;
-  state.stream.addEventListener("events", debounceRefresh);
-  state.stream.addEventListener("error", debounceRefresh);
-  state.stream.onerror = () => {
-    debounceRefresh();
-  };
+  closeStreams();
+  for (const bundle of session.bundles || []) {
+    const stream = new EventSource(`/api/bundles/${encodeURIComponent(bundle.id)}/stream`);
+    stream.onmessage = debounceRefresh;
+    stream.addEventListener("events", debounceRefresh);
+    stream.addEventListener("error", debounceRefresh);
+    stream.onerror = () => {
+      debounceRefresh();
+    };
+    state.streams.push(stream);
+  }
 }
 
 let refreshTimer = null;
@@ -186,79 +276,289 @@ function debounceRefresh() {
   }
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
-    loadBundleState().catch(showError);
+    loadSessionState().catch(showError);
   }, 250);
 }
 
-function timelineItems() {
-  if (!state.trace) {
+function inferenceEntries() {
+  return state.traces
+    .flatMap(({ bundle, trace }) =>
+      Object.values(trace.inference_calls || {}).map((record) => {
+        const inference = inferenceRecord(record);
+        const inferenceId = inference.inference_call_id || record.inference_call_id;
+        return {
+          key: scopedKey(bundle.id, inferenceId),
+          bundle,
+          trace,
+          record,
+          inference,
+          seq: inference.execution?.started_seq ?? 0,
+          startedAt: bundle.started_at_unix_ms || trace.started_at_unix_ms || 0,
+        };
+      }),
+    )
+    .sort(compareTimelineEntries);
+}
+
+function firstInferenceKeyForBundle(bundleId) {
+  return inferenceEntries().find((entry) => entry.bundle.id === bundleId)?.key || null;
+}
+
+function scopedKey(scope, id) {
+  return `${scope || "unknown"}::${id || "unknown"}`;
+}
+
+function compareTimelineEntries(left, right) {
+  return (
+    (left.startedAt || 0) - (right.startedAt || 0) ||
+    (left.seq || 0) - (right.seq || 0) ||
+    String(left.id || "").localeCompare(String(right.id || ""))
+  );
+}
+
+function traceLabel(bundle) {
+  return `trace ${bundle.trace_id ? shortId(bundle.trace_id) : shortId(bundle.id)}`;
+}
+
+function timelineGroups() {
+  if (state.traces.length === 0) {
     return [];
   }
 
-  const items = [];
-  for (const turn of Object.values(state.trace.turns || {})) {
-    items.push({
-      kind: "turn",
-      seq: turn.started_seq ?? turn.ended_seq ?? 0,
-      id: turn.codex_turn_id,
-      title: turn.codex_turn_id,
-      meta: turn.thread_id,
-    });
-  }
-  for (const call of Object.values(state.trace.inference_calls || {})) {
-    const inference = inferenceRecord(call);
-    items.push({
-      kind: "inference",
-      seq: inference.execution?.started_seq ?? 0,
-      id: inference.inference_call_id,
-      title: `${inference.model || "model"} / ${inference.provider_name || "provider"}`,
-      meta: `${(inference.request_item_ids || []).length} input items`,
-    });
-  }
-  for (const compaction of Object.values(state.trace.compactions || {})) {
-    items.push({
+  const inferences = inferenceEntries()
+    .map((entry) => {
+      const { bundle, inference, record } = entry;
+      const traceName = traceLabel(bundle);
+      return {
+        kind: "inference",
+        seq: entry.seq,
+        startedAt: entry.startedAt,
+        id: entry.key,
+        inferenceId: inference.inference_call_id,
+        turnId: inference.codex_turn_id,
+        turnKey: scopedKey(bundle.id, inference.codex_turn_id),
+        bundleId: bundle.id,
+        trace: traceName,
+        title: `${inference.inference_call_id || "inference"} - ${inference.model || "model"} / ${inference.provider_name || "provider"}`,
+        meta: `${(inference.request_item_ids || []).length} input items / ${traceName}`,
+        record,
+        inference,
+        traceState: entry.trace,
+      };
+    })
+    .sort(compareTimelineEntries);
+  const tools = state.traces.flatMap(({ bundle, trace }) =>
+    Object.values(trace.tool_calls || {}).map((call) => {
+      const id = call.tool_call_id || call.call_id;
+      const turnId = call.started_by_codex_turn_id || call.codex_turn_id;
+      return {
+        kind: "tool",
+        seq: call.execution?.started_seq ?? call.started_seq ?? 0,
+        startedAt: bundle.started_at_unix_ms || trace.started_at_unix_ms || 0,
+        id: scopedKey(bundle.id, id),
+        turnId,
+        turnKey: scopedKey(bundle.id, turnId),
+        bundleId: bundle.id,
+        trace: traceLabel(bundle),
+        title: toolCallTitle(call),
+        meta: `${call.execution?.status || call.status || ""} / ${traceLabel(bundle)}`,
+      };
+    }),
+  );
+  const compactions = state.traces.flatMap(({ bundle, trace }) =>
+    Object.values(trace.compactions || {}).map((compaction) => ({
       kind: "compaction",
-      seq: compaction.started_seq ?? compaction.ended_seq ?? 0,
-      id: compaction.compaction_id,
+      seq: compaction.installed_seq ?? compaction.started_seq ?? compaction.ended_seq ?? 0,
+      startedAt: bundle.started_at_unix_ms || trace.started_at_unix_ms || 0,
+      id: scopedKey(bundle.id, compaction.compaction_id),
+      turnId: compaction.codex_turn_id,
+      turnKey: scopedKey(bundle.id, compaction.codex_turn_id),
+      bundleId: bundle.id,
+      trace: traceLabel(bundle),
       title: compaction.compaction_id,
-      meta: compaction.thread_id,
-    });
-  }
-  for (const call of Object.values(state.trace.tool_calls || {})) {
-    items.push({
-      kind: "tool",
-      seq: call.started_seq ?? 0,
-      id: call.call_id,
-      title: call.tool_name,
-      meta: call.status,
-    });
+      meta: `${compaction.thread_id || ""} / ${traceLabel(bundle)}`,
+    })),
+  );
+  const items = [...inferences, ...tools, ...compactions].sort(compareTimelineEntries);
+  const turns = state.traces
+    .flatMap(({ bundle, trace }) =>
+      Object.values(trace.codex_turns || trace.turns || {}).map((turn) => ({
+        ...turn,
+        seq: turn.execution?.started_seq ?? turn.started_seq ?? turn.execution?.ended_seq ?? turn.ended_seq ?? 0,
+        startedAt: bundle.started_at_unix_ms || trace.started_at_unix_ms || 0,
+        status: turn.execution?.status || turn.status || "",
+        bundleId: bundle.id,
+        trace: traceLabel(bundle),
+        traceState: trace,
+        turnKey: scopedKey(bundle.id, turn.codex_turn_id),
+      })),
+    )
+    .sort(compareTimelineEntries);
+
+  if (turns.length === 0) {
+    return [
+      {
+        id: "ungrouped",
+        title: "Ungrouped events",
+        meta: `${items.length} events`,
+        seq: 0,
+        startedAt: 0,
+        trace: "",
+        items,
+      },
+    ];
   }
 
-  items.sort((a, b) => a.seq - b.seq);
-  return items;
+  const groups = turns.map((turn) => {
+    const turnInferences = inferences.filter((item) => item.turnKey === turn.turnKey);
+    return {
+      id: turn.turnKey,
+      title: turnTitle(turn, turnInferences),
+      meta: turnMeta(turn, turnInferences),
+      seq: turn.seq,
+      startedAt: turn.startedAt,
+      trace: turn.trace,
+      bundleId: turn.bundleId,
+      items: [],
+    };
+  });
+  const groupsByTurn = new Map(groups.map((group) => [group.id, group]));
+  const ungroupedItems = [];
+  for (const item of items) {
+    const group = groupsByTurn.get(item.turnKey);
+    if (group) {
+      group.items.push(item);
+    } else {
+      ungroupedItems.push(item);
+    }
+  }
+  if (ungroupedItems.length > 0) {
+    groups.push({
+      id: "ungrouped",
+      title: "Ungrouped events",
+      meta: `${ungroupedItems.length} events`,
+      seq: Number.MAX_SAFE_INTEGER,
+      startedAt: Number.MAX_SAFE_INTEGER,
+      trace: "",
+      items: ungroupedItems,
+    });
+  }
+  return groups
+    .filter((group) => group.items.length > 0)
+    .sort(compareTimelineEntries);
+}
+
+function toolCallTitle(call) {
+  if (call.tool_name) {
+    return call.tool_name;
+  }
+  if (call.summary?.label) {
+    return call.summary.label;
+  }
+  if (call.kind?.type) {
+    return call.kind.type;
+  }
+  return call.tool_call_id || call.call_id || "tool";
+}
+
+function turnTitle(turn, inferences) {
+  const firstInference = inferences[0];
+  const userMessage = firstInference
+    ? latestRealUserMessage(firstInference.inference?.request_item_ids || [], firstInference.traceState)
+    : null;
+  return userMessage || shortId(turn.codex_turn_id) || "Codex turn";
+}
+
+function turnMeta(turn, inferences) {
+  const status = turn.status ? ` - ${turn.status}` : "";
+  return `${inferences.length} inference${inferences.length === 1 ? "" : "s"}${status} / ${turn.trace || ""}`;
+}
+
+function latestRealUserMessage(itemIds, trace = state.trace) {
+  const conversationItems = trace?.conversation_items || {};
+  for (let index = itemIds.length - 1; index >= 0; index -= 1) {
+    const item = conversationItems[itemIds[index]];
+    if (item?.role !== "user") {
+      continue;
+    }
+    const preview = conversationItemPreview(item);
+    if (preview && !isContextScaffold(preview)) {
+      return truncateText(preview, 88);
+    }
+  }
+  return null;
+}
+
+function conversationItemPreview(item) {
+  const parts = item?.body?.parts || [];
+  const text = parts
+    .map((part) => part.text || part.summary || part.label || part.source || "")
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || null;
+}
+
+function isContextScaffold(text) {
+  const trimmed = text.trimStart();
+  return (
+    trimmed.startsWith("# AGENTS.md instructions") ||
+    trimmed.startsWith("<environment_context>") ||
+    trimmed.startsWith("<permissions instructions>") ||
+    trimmed.startsWith("<skill") ||
+    trimmed.startsWith("<skills") ||
+    trimmed.startsWith("<plugins") ||
+    trimmed.startsWith("## Skills") ||
+    trimmed.startsWith("### Available plugins")
+  );
+}
+
+function truncateText(text, maxLength) {
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength - 3)}...`;
+}
+
+function renderTimelineItem(item) {
+  const active =
+    item.kind === "inference" && item.id === state.selectedInferenceKey ? " active" : "";
+  return `
+    <button class="timeline-item${active}" data-kind="${escapeHtml(item.kind)}" data-id="${escapeHtml(item.id)}">
+      <div class="timeline-row">
+        <span class="kind">${escapeHtml(item.kind)}</span>
+        <span class="seq">#${escapeHtml(item.seq)}</span>
+      </div>
+      <strong title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</strong>
+      <span class="muted" title="${escapeHtml(item.meta || "")}">${escapeHtml(item.meta || "")}</span>
+    </button>`;
 }
 
 function renderTimeline() {
   const timeline = $("timeline");
-  const items = timelineItems();
-  if (items.length === 0) {
+  const groups = timelineGroups();
+  if (groups.length === 0) {
     timeline.innerHTML = `<p class="empty">No events yet.</p>`;
     return;
   }
 
-  timeline.innerHTML = items
-    .map((item) => {
-      const active =
-        item.kind === "inference" && item.id === state.selectedInferenceId ? " active" : "";
+  timeline.innerHTML = groups
+    .map((group, index) => {
       return `
-        <button class="timeline-item${active}" data-kind="${escapeHtml(item.kind)}" data-id="${escapeHtml(item.id)}">
-          <div class="timeline-row">
-            <span class="kind">${escapeHtml(item.kind)}</span>
-            <span class="seq">#${escapeHtml(item.seq)}</span>
+        <section class="timeline-group">
+          <div class="timeline-group-header">
+            <div>
+              <span class="kind">turn ${escapeHtml(index + 1)}</span>
+              <span class="trace-chip">${escapeHtml(group.trace || "")}</span>
+              <strong title="${escapeHtml(group.title)}">${escapeHtml(group.title)}</strong>
+            </div>
+            <span class="muted" title="${escapeHtml(group.id)}">${escapeHtml(group.meta)}</span>
           </div>
-          <strong title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</strong>
-          <span class="muted" title="${escapeHtml(item.meta || "")}">${escapeHtml(item.meta || "")}</span>
-        </button>`;
+          <div class="timeline-group-items">
+            ${group.items.map(renderTimelineItem).join("")}
+          </div>
+        </section>`;
     })
     .join("");
 
@@ -271,14 +571,26 @@ function renderTimeline() {
   });
 }
 
-async function selectInference(inferenceId) {
-  const record = state.trace?.inference_calls?.[inferenceId];
-  if (!record) {
+async function selectInference(inferenceKey) {
+  const selectionRevision = state.selectionRevision + 1;
+  state.selectionRevision = selectionRevision;
+  const entries = inferenceEntries();
+  const entry =
+    entries.find((candidate) => candidate.key === inferenceKey) ||
+    entries.find(
+      (candidate) =>
+        candidate.inference.inference_call_id === inferenceKey && candidate.bundle.id === state.bundleId,
+    );
+  if (!entry) {
     return;
   }
-  const inference = inferenceRecord(record);
+  const record = entry.record;
+  const inference = entry.inference;
 
-  state.selectedInferenceId = inferenceId;
+  state.bundleId = entry.bundle.id;
+  state.trace = entry.trace;
+  state.selectedInferenceId = inference.inference_call_id;
+  state.selectedInferenceKey = entry.key;
   state.selectedComponent = null;
   state.selectedCategory = null;
   state.requestPayload = null;
@@ -288,16 +600,28 @@ async function selectInference(inferenceId) {
   const assemblyPayloadId = record.prompt_assembly_payload_id || inference.prompt_assembly_payload_id;
 
   if (requestPayloadId) {
-    state.requestPayload = await fetchJson(
-      `/api/bundles/${encodeURIComponent(state.bundleId)}/payload/${encodeURIComponent(requestPayloadId)}`,
+    const requestPayload = await fetchJson(
+      `/api/bundles/${encodeURIComponent(entry.bundle.id)}/payload/${encodeURIComponent(requestPayloadId)}`,
     );
+    if (selectionRevision !== state.selectionRevision) {
+      return;
+    }
+    state.requestPayload = requestPayload;
   }
   if (assemblyPayloadId) {
-    state.assemblyPayload = await fetchJson(
-      `/api/bundles/${encodeURIComponent(state.bundleId)}/payload/${encodeURIComponent(assemblyPayloadId)}`,
+    const assemblyPayload = await fetchJson(
+      `/api/bundles/${encodeURIComponent(entry.bundle.id)}/payload/${encodeURIComponent(assemblyPayloadId)}`,
     );
+    if (selectionRevision !== state.selectionRevision) {
+      return;
+    }
+    state.assemblyPayload = assemblyPayload;
   }
 
+  if (selectionRevision !== state.selectionRevision) {
+    return;
+  }
+  renderBundles();
   renderTimeline();
   renderRequest();
   renderInspector();
